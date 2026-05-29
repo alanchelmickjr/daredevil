@@ -22,6 +22,7 @@ from .audio.utils import resample
 from .stage1.mic_arrays import MicArray, detect as detect_array
 from .stage1.spatial import Stage1, SpatialSource
 from .stage1.separation import Separator
+from .stage1.nmf import SpectralLibrary
 from .stage2.embedding import EmbeddingSlot
 from .stage2.events import EventsSlot
 from .stage2.prosody import ProsodySlot
@@ -75,6 +76,13 @@ class Pipeline:
         self.store = make_store(self.config)
         self.enrollment = EnrollmentManager(self.config, self.slots["embedding"], self.store)
         self.tracker = UnknownTracker(params=self.config.tracker)
+        # Frame-stable spectral features for tracker association (NMF). ECAPA stays
+        # for identity; this answers the different question of "same ongoing sound?".
+        n = self.config.nmf
+        self.spectral = (SpectralLibrary(
+            n_bins=n.n_bins, n_components=n.n_components, fit_after=n.fit_after,
+            learn_iters=n.learn_iters, decompose_iters=n.decompose_iters,
+            vad=self.config.thresholds.vad) if n.enabled else None)
         self.router = AttentionRouter(self.config)
         if warmup:
             self.warmup()
@@ -178,7 +186,11 @@ class Pipeline:
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
 
-            track_id = self.tracker.assign(emb, position=pos, event_class=ev.get("class"))
+            # Associate the contact on a frame-stable spectral feature (NMF), not
+            # the ECAPA embedding (which jitters frame to frame); classify identity
+            # on the ECAPA embedding, keyed to the resolved track.
+            track_feat = self.spectral.feature(src.audio, src.sr) if self.spectral else emb
+            track_id = self.tracker.assign(track_feat, position=pos, event_class=ev.get("class"))
             match = self.enrollment.match(emb, energy=energy, key=track_id)
 
             identity = None

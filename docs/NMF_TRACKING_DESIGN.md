@@ -145,15 +145,31 @@ For Daredevil:
 - **NMF + spatial cues** (Ozerov & Févotte 2010) — combine spectral bases with
   DOA for multichannel separation
 
-## Implementation Plan
+## Implementation Plan — status
 
-1. Add `daredevil/stage1/nmf.py` — the basis decomposer (numpy, ~50 lines)
-2. Add basis fields to enrollment records (learned during enroll, stored alongside vector)
-3. Tracker uses NMF activation similarity for association (instead of or alongside embedding cosine)
-4. Separation gating: NMF determines if ConvTasNet is needed this frame
-5. Online basis learning: after N confirmed frames, learn and store the basis for an unknown track
-6. Optional: `daredevil calibrate` command that records the room for 30s, learns
-   background bases, and writes them to config — so the system knows what to ignore from the start
+1. ✅ `daredevil/stage1/nmf.py` — basis decomposer + `SpectralLibrary`
+   (numpy NMF activations; stdlib band-group fallback, same dimension).
+2. ⏳ Per-source basis fields on enrollment records — *deferred* (see note).
+3. ✅ Tracker associates on the frame-stable NMF activation: `pipeline.py` feeds
+   `SpectralLibrary.feature(...)` into `tracker.assign`; ECAPA stays for identity
+   (SPRT, keyed per track). Tunables in `config.py` → `NMFParams`.
+4. ⏳ Separation gating via NMF (today: energy + spectral-distinctness gate).
+5. ⏳ Online basis learning after N confirmed frames.
+6. ✅ `daredevil calibrate` exists (seeds the identity model); learning background
+   *bases* there is a natural extension of step 5.
+
+### Note — why v1 uses a fixed basis (and defers online learning)
+
+The tracker feature must keep a **constant dimension** for a contact across its
+life. If the representation switched from a 48-bin envelope to k-dim activations
+mid-track (the moment an online basis is first learned), every existing track's
+stored feature would silently change meaning and association would break exactly
+at the switch. So v1 ships a **fixed overlapping-triangular (universal) basis** —
+the "fixed/supervised bases" option named in this doc — which is deterministic,
+frame-stable, and dimensionally stable. `learn_basis()` is implemented and ready;
+wiring per-source online bases (steps 2 & 5) needs a dimension-stable scheme
+(fixed k, append a per-source column, recompute affected tracks) and is the clear
+next step — tracked honestly rather than shipped as a latent bug.
 
 ## Why This Works When ECAPA Doesn't (for tracking)
 
