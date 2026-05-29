@@ -45,7 +45,6 @@ def render_ascii(amap: dict) -> str:
     lines.append(f"  attention gate → LLM: {', '.join(routed) if routed else 'nothing'}"
                  "   (others heard, gated out)")
     t = amap.get("timing", {})
-    sim = " (simulated)" if t.get("simulated") else ""
     speed = ""
     try:
         if t.get("parallel_ms"):
@@ -53,7 +52,7 @@ def render_ascii(amap: dict) -> str:
     except Exception:
         speed = ""
     lines.append("  " + "─" * 58)
-    lines.append(f"  timing{sim}: parallel {t.get('parallel_ms','?')}ms  vs  "
+    lines.append(f"  timing: parallel {t.get('parallel_ms','?')}ms  vs  "
                  f"sequential {t.get('sequential_ms','?')}ms{speed}")
     lines.append("  privacy: on-device · no cloud · embeddings non-reversible")
     lines.append(_RULE)

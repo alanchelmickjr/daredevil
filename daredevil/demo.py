@@ -30,9 +30,6 @@ def add_demo_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name", default="alan", help="speaker name to enroll (default: alan)")
     parser.add_argument("--enroll-seconds", type=float, default=3.0)
     parser.add_argument("--duration", type=float, default=1.0, help="listen window (s)")
-    parser.add_argument("--simulate-latency", action="store_true",
-                        help="inject representative model latencies (clearly labeled) to "
-                             "illustrate the parallel speedup on a machine without the models")
     parser.add_argument("--fallback", action="store_true", help="force the pure-Python backend")
     parser.add_argument("--no-viz", action="store_true", help="skip the on-screen radar")
     parser.add_argument("--save-png", help="also save the awareness map radar as a PNG (needs matplotlib)")
@@ -44,15 +41,10 @@ def run_demo(args: argparse.Namespace) -> int:
     from .stage1.mic_arrays import MACBOOK_3
 
     synthetic = not args.live and not args.file
-    forced_fallback = getattr(args, "fallback", False)
-    backend = "fallback" if forced_fallback else Config().resolved_backend()
-    # In the synthetic demo with no ML backends, illustrate the parallel win with
-    # clearly-labeled representative latencies. Real backends are measured live.
-    simulate = getattr(args, "simulate_latency", False) or (synthetic and backend == "fallback")
-    config = Config(simulate_latency=simulate)
-    if forced_fallback:
+    config = Config()
+    if getattr(args, "fallback", False):
         config.backend = "fallback"
-    # The synthetic scene simulates a MacBook 3-mic array so WHERE is demonstrated.
+    # The synthetic scene uses a MacBook 3-mic array so WHERE is demonstrated.
     array = MACBOOK_3 if synthetic else None
     pipe = Pipeline(config=config, array=array)
 
@@ -94,8 +86,8 @@ def run_demo(args: argparse.Namespace) -> int:
     print("── AWARENESS MAP (this is what the LLM receives) " + "─" * 14)
     print(json.dumps(amap, indent=2))
     print()
-    if amap["timing"].get("simulated"):
-        print("  ⓘ timing is simulated (representative model latencies) — real backends are measured live\n")
+    if amap["backend"] == "fallback":
+        print("  ⓘ pure-Python timing (GIL-bound) — the parallel speedup widens with real model backends\n")
 
     # The attention gate — a struct is built for every source, but only some reach
     # the conversational LLM. This is the point of the system.

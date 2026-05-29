@@ -82,9 +82,10 @@ class GunStore(LocalStore):
     """
 
     def __init__(self, data_dir: Optional[Path] = None, key: Optional[bytes] = None,
-                 peers: tuple = ()):
+                 peers: tuple = (), timeout: float = 2.0):
         super().__init__(data_dir, key)
         self.peers = tuple(peers)
+        self.timeout = timeout
 
     def put(self, name: str, record: dict) -> None:
         super().put(name, record)
@@ -101,7 +102,7 @@ class GunStore(LocalStore):
             for peer in self.peers:
                 req = urllib.request.Request(peer, data=data,
                                              headers={"Content-Type": "application/json"})
-                urllib.request.urlopen(req, timeout=1.5)
+                urllib.request.urlopen(req, timeout=self.timeout)
         except Exception:
             pass  # offline-first: local write already succeeded
 
@@ -110,5 +111,6 @@ def make_store(config: Config) -> IdentityStore:
     key = crypto.key_from_env()
     data_dir = config.resolved_data_dir()
     if config.fleet_backend == "gun":
-        return GunStore(data_dir=data_dir, key=key, peers=config.gun_peers)
+        return GunStore(data_dir=data_dir, key=key, peers=config.gun_peers,
+                        timeout=config.fleet_timeout_s)
     return LocalStore(data_dir=data_dir, key=key)

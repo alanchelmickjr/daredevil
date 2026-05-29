@@ -40,8 +40,15 @@ must run on any laptop with zero special hardware, and accelerate on device.
    doubt, make identification solid first.
 6. **No personal names of third parties** (e.g. the demo recipient) anywhere in
    committed files.
-7. **Be honest in the demo.** The synthetic scene is labeled SYNTHETIC. Simulated
-   latencies are labeled `"simulated"`. Don't present fabricated numbers as live.
+7. **Be honest in the demo.** The synthetic scene is labeled SYNTHETIC. Timing is
+   *measured*, never invented. Don't present fabricated numbers as live.
+8. **No hardcoded time in logic.** No `sleep`-to-fake-timing, no magic delay or
+   timeout literals scattered through the code. Timing is measured; timeouts and
+   intervals are named config tunables. Hardcoded time is a tell for weak logic.
+9. **No fake / mock / prop code.** A path either really works or is an explicit
+   `# TODO` that fails honestly (returns a clearly-marked not-implemented result) —
+   never fake success. Deterministic *fallbacks* (real, simpler algorithms) and the
+   *labeled* synthetic test scene are legitimate; disguised stubs are not.
 
 ## Scope fences
 
@@ -134,7 +141,8 @@ docs/                  ARCHITECTURE, MODELS, ROADMAP, PRIVACY, BUILD_SPEC
 pip install -e ".[dev]"        # or nothing — core needs no deps
 python -m daredevil.demo       # end-to-end synthetic demo
 python -m daredevil.demo --live           # real mic
-python -m daredevil.demo --simulate-latency
+python -m daredevil serve      # web HUD at http://127.0.0.1:8770
+python -m daredevil bench      # crowd-scaling latency (→ LLM stays flat)
 python -m pytest -q            # tests run on stdlib alone
 daredevil devices              # detected array + installed backends
 ```

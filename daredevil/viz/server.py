@@ -5,8 +5,9 @@ Serves the neumorphic-steampunk orbital HUD and streams awareness maps:
   GET /awareness   -> the current awareness map (JSON)
   GET /probe?id=X  -> transcribe source X (local STT) and route it to the LLM
 
-`daredevil serve` launches it. STT/LLM are local-only by design; the /probe
-transcript is an honest placeholder until whisper.cpp + Ollama are wired in.
+`daredevil serve` launches it. STT/LLM are local-only by design; /probe is an
+explicit TODO (returns implemented:false) until whisper.cpp is wired in — it never
+fakes a transcript.
 """
 from __future__ import annotations
 
@@ -58,9 +59,12 @@ def _make_handler(state: _State):
                 return self._send(200, json.dumps(state.awareness()))
             if u.path == "/probe":
                 sid = (parse_qs(u.query).get("id") or ["?"])[0]
-                # Local STT (whisper.cpp) wires in here — honest placeholder for now.
-                transcript = f"(local STT not installed — '{sid}' would be transcribed on-device here)"
-                return self._send(200, json.dumps({"id": sid, "transcript": transcript, "routed_to_llm": True}))
+                # TODO: local STT (whisper.cpp) — transcribe this source on-device and
+                # hand the text to the LLM. Not implemented; respond honestly, never fake.
+                return self._send(200, json.dumps({
+                    "id": sid, "implemented": False,
+                    "todo": "local STT (whisper.cpp) not wired yet",
+                }))
             return self._send(404, json.dumps({"error": "not found"}))
 
     return Handler

@@ -44,10 +44,12 @@ No microphone? No GPU? No models downloaded? **It still runs** — a determinist
 
 ── AWARENESS MAP (this is what the LLM receives) ──────────────
 {
+  "routed_to_llm": ["UNKNOWN-001", "alan"],
   "sources": [
     {
       "id": "UNKNOWN-001",
       "type": "unknown",
+      "attention": "surface",
       "event": { "class": "baby_cry", "confidence": 0.95, "safety_critical": true },
       "prosody": { "state": "distressed", "distress": 0.95 },
       "position": { "azimuth": 45.0, "elevation": 10.0 },
@@ -57,14 +59,24 @@ No microphone? No GPU? No models downloaded? **It still runs** — a determinist
     {
       "id": "alan",
       "type": "enrolled",
+      "attention": "surface",
       "event": { "class": "speech", "confidence": 0.95 },
       "prosody": { "state": "calm", "distress": 0.12 },
-      "identity": { "confidence": 0.629, "match_score": 0.995, "enrollment_confidence": 0.632 },
+      "identity": { "confidence": 0.632, "match_score": 1.00, "enrollment_confidence": 0.632 },
       "position": { "azimuth": 0.0, "elevation": 0.0 },
-      "priority": 0.39
+      "priority": 0.40
+    },
+    {
+      "id": "UNKNOWN-002",
+      "type": "unknown",
+      "attention": "ambient",
+      "event": { "class": "music", "confidence": 0.95 },
+      "prosody": { "state": "calm", "distress": 0.05 },
+      "position": { "azimuth": 270.0, "elevation": 0.0 },
+      "priority": 0.16
     }
   ],
-  "timing": { "parallel_ms": 297.1, "sequential_ms": 681.4 },
+  "timing": { "parallel_ms": 76.1, "sequential_ms": 85.4 },
   "privacy": { "cloud_used": false, "raw_audio_stored": false, "embeddings": "non-reversible" }
 }
 
@@ -72,16 +84,18 @@ No microphone? No GPU? No models downloaded? **It still runs** — a determinist
   ACOUSTIC AWARENESS MAP   — what the LLM receives
   array: macbook-3 (3 mics, spatial)   backend: fallback
   sources (high → low priority):
-  ⚠ [1.00] ██████████ UNKNOWN-001  baby_cry   az   45° NE      distressed
+  ⚠ [1.00] ██████████ →LLM UNKNOWN-001  baby_cry  az   45° NE     distressed
            └─ OVERRIDE: SAFETY_CRITICAL
-    [0.39] ████······ alan         speech     az    0° N       calm         id=0.63
+    [0.40] ████······ →LLM alan         speech    az    0° N      calm       id=0.63
+    [0.16] ██········ ···· UNKNOWN-002  music     az  270° W      calm
+  attention gate → LLM: UNKNOWN-001, alan   (others heard, gated out)
   ──────────────────────────────────────────────────────────
-  timing: parallel 297ms  vs  sequential 681ms   →  2.3× faster
+  timing: parallel 76ms  vs  sequential 85ms
   privacy: on-device · no cloud · embeddings non-reversible
 ════════════════════════════════════════════════════════════
 ```
 
-The enrolled human is identified. The unknown safety-critical event jumps the queue. The model gets the priority order for free.
+The enrolled human is identified. The baby cry jumps the queue. The radio is heard and tracked — but **the attention gate keeps it out of the LLM**. The model gets a ranked, *filtered* map, not a firehose.
 
 ---
 
@@ -226,7 +240,8 @@ Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 ```bash
 python -m daredevil.demo               # full demo (synthetic scene)
 python -m daredevil.demo --live        # use your real microphone
-python -m daredevil.demo --simulate-latency   # illustrate the parallel speedup
+python -m daredevil serve              # web HUD at http://127.0.0.1:8770
+daredevil bench                        # crowd-scaling latency (→ LLM stays flat)
 daredevil enroll --name alan --seconds 10     # enroll a speaker
 daredevil listen --json                # one awareness map -> stdout
 daredevil devices                      # what was detected / installed

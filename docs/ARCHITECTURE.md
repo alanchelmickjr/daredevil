@@ -51,8 +51,8 @@ Each slot implements the same `Slot` contract (`base.py`): `warmup()` then
 correct because real backends (torch / ONNX / numpy) **release the GIL** during
 native compute, so wall-clock latency approaches the slowest slot rather than the
 sum (the patent's core claim). The pure-Python fallback is GIL-bound — we say so,
-and offer `--simulate-latency` (representative, clearly-labeled model timings) to
-illustrate the win on a machine without the real models installed.
+and the speedup widens once real backends are installed. Timing is always
+measured, never simulated.
 
 | Slot | Question | Output keys |
 |---|---|---|
@@ -117,7 +117,7 @@ multi-core slot bank. Three tiers:
       "priority_override": "SAFETY_CRITICAL|DISTRESS"      // only when triggered
     }
   ],
-  "timing": { "parallel_ms": 0.0, "sequential_ms": 0.0, "simulated": false },
+  "timing": { "parallel_ms": 0.0, "sequential_ms": 0.0 },
   "privacy": { "cloud_used": false, "raw_audio_stored": false, "embeddings": "non-reversible" }
 }
 ```
