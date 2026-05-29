@@ -22,8 +22,8 @@ ONNX export path.
 
 **GIL honesty:** slots run in a `ThreadPoolExecutor`. This parallelizes because
 torch/ONNX/numpy release the GIL during native inference. The pure-Python fallback
-is GIL-bound; we never pretend otherwise (`--simulate-latency` shows representative,
-labeled timings).
+is GIL-bound; we never pretend otherwise — timing is always measured, and the
+speedup widens once real backends are installed.
 
 ## Slot A — WHO (speaker identity) · the headline
 

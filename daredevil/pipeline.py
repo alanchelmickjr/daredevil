@@ -149,8 +149,6 @@ class Pipeline:
 
         timing = {"parallel_ms": round(parallel_ms, 1),
                   "sequential_ms": round(sequential_ms, 1)}
-        if self.config.simulate_latency:
-            timing["simulated"] = True
 
         amap = self.router.build(records, datetime.now().isoformat(), timing,
                                  cap.array, self.config.resolved_backend())
@@ -161,8 +159,4 @@ class Pipeline:
 
     # ----------------------------------------------------------------- helper
     def _run_slot(self, slot, audio, sr, ctx):
-        if self.config.simulate_latency:
-            ms = self.config.simulated_slot_ms.get(slot.name, 0.0)
-            if ms:
-                time.sleep(ms / 1000.0)  # sleep releases the GIL -> parallel wins
         return slot.run(audio, sr, ctx)

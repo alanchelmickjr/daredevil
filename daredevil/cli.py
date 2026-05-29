@@ -34,9 +34,7 @@ def _cmd_enroll(args) -> int:
 def _cmd_listen(args) -> int:
     from .stage1.mic_arrays import MACBOOK_3
     synthetic = not args.live and not args.file
-    simulate = args.simulate_latency or (synthetic and Config().resolved_backend() == "fallback")
-    config = Config(simulate_latency=simulate)
-    pipe = Pipeline(config=config, array=(MACBOOK_3 if synthetic else None))
+    pipe = Pipeline(config=Config(), array=(MACBOOK_3 if synthetic else None))
     source = "live" if args.live else ("file" if args.file else "synthetic")
     amap = pipe.listen(duration=args.duration, source=source, file=args.file)
     if args.json:
@@ -108,7 +106,6 @@ def main(argv=None) -> int:
     pl.add_argument("--duration", type=float, default=1.0)
     pl.add_argument("--live", action="store_true")
     pl.add_argument("--file")
-    pl.add_argument("--simulate-latency", action="store_true")
     pl.add_argument("--json", action="store_true")
 
     psv = sub.add_parser("serve", help="run the local web HUD (neumorphic-steampunk)")

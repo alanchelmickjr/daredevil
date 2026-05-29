@@ -83,6 +83,7 @@ const stage=document.getElementById('stage'),links=document.getElementById('link
   wake=document.getElementById('wake');
 let cards={}, seen={};
 const FREQ={speech:3,baby_cry:7,alarm:9,siren:8,music:5};
+const POLL_MS=1200, STALE_MS=4000, TOAST_MS=4500;  // UI refresh / sticky-fade / toast windows
 function rings(){const cx=innerWidth/2,cy=innerHeight/2,base=Math.min(cx,cy);
   [0.4,0.7,1.0].forEach(f=>{const d=base*2*f,r=document.createElement('div');
     r.className='ring';r.style.width=d+'px';r.style.height=d+'px';stage.appendChild(r);});}
@@ -122,16 +123,17 @@ function render(map){
     if(!surfaced)ln.setAttribute('stroke-dasharray','5 5');
     links.appendChild(ln);
   });
-  Object.keys(cards).forEach(id=>{if(now-(seen[id]||0)>4000){cards[id].remove();delete cards[id];}});
+  Object.keys(cards).forEach(id=>{if(now-(seen[id]||0)>STALE_MS){cards[id].remove();delete cards[id];}});
   if(map.wake_word)wake.textContent='🎙 '+map.wake_word;
 }
 function say(html,ms){bubble.style.display='block';bubble.innerHTML=html;
-  clearTimeout(bubble._t);bubble._t=setTimeout(()=>bubble.style.display='none',ms||4500);}
+  clearTimeout(bubble._t);bubble._t=setTimeout(()=>bubble.style.display='none',ms||TOAST_MS);}
 function probe(id){fetch('/probe?id='+encodeURIComponent(id)).then(r=>r.json())
-  .then(d=>say('<b>'+d.id+' → LLM (STT)</b><br>'+d.transcript)).catch(()=>{});}
-core.onclick=()=>say('<b>focus</b><br>listening for your command… (push-to-talk)',2600);
+  .then(d=>say(d.implemented===false ? ('<b>'+d.id+'</b><br>TODO: '+d.todo)
+                                     : ('<b>'+d.id+' → LLM</b><br>'+d.transcript))).catch(()=>{});}
+core.onclick=()=>say('<b>focus</b><br>listening for your command… (push-to-talk)');
 function poll(){fetch('/awareness').then(r=>r.json()).then(render).catch(()=>{});}
-rings();poll();setInterval(poll,1200);
+rings();poll();setInterval(poll,POLL_MS);
 addEventListener('resize',()=>{document.querySelectorAll('.ring').forEach(r=>r.remove());rings();});
 </script>
 </body>

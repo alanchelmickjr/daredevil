@@ -44,8 +44,8 @@ harden into the everywhere-SDK that also runs on the custom hardware.
 - [x] Enroll a speaker in 3 seconds and identify correctly
 - [x] Classify baby cry / alarm as safety-critical (priority override)
 - [x] Prosody runs locally (no cloud)
-- [x] Parallel-vs-sequential timing surfaced (measured live with real backends;
-      simulated + labeled in pure-Python)
+- [x] Parallel-vs-sequential timing surfaced (always measured; pure-Python is
+      GIL-bound, so the speedup widens with real backends)
 - [x] Clean, useful structured JSON awareness map
 - [ ] `pip install daredevil` from PyPI on a MacBook
 - [ ] Runs on both MacBook and Orin with real models

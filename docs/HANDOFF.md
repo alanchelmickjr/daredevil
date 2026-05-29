@@ -40,7 +40,6 @@ Two entry points: the installed `daredevil` script and `python -m daredevil`.
 | `daredevil demo` | End-to-end demo on the synthetic scene (enroll → listen → awareness map → radar). |
 | `daredevil demo --live` | Same, but uses the real microphone (needs `[audio]`). |
 | `daredevil demo --file scene.wav` | Run against a recorded multi-source WAV. |
-| `daredevil demo --simulate-latency` | Inject labeled representative model latencies (illustrate the parallel win). |
 | `daredevil demo --spectrogram out.png` | Also render the spectrogram + overlay PNG (needs `[viz]`). |
 | `daredevil demo --save-png radar.png` | Also render the polar radar PNG. |
 | `daredevil demo --json` | Print only `{enrollment, awareness_map}` JSON. |

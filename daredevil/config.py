@@ -153,7 +153,6 @@ class Config:
 
     # behaviour
     allow_cloud: bool = False      # hard guarantee: no network egress for inference
-    simulate_latency: bool = False  # illustrate parallel-vs-sequential on bare machines
 
     # focus control
     wake_word: str = "Hey Radar"   # local wake word (openWakeWord) to grab/steer focus
@@ -167,13 +166,7 @@ class Config:
     data_dir: Optional[str] = None     # None -> default_data_dir()
     fleet_backend: str = "local"       # "local" (default) | "gun"
     gun_peers: tuple = ()              # e.g. ("http://127.0.0.1:8765/gun",)
-
-    # representative per-slot CPU latencies (ms) used only when simulate_latency=True.
-    # These are illustrative model timings, NOT measured live numbers, and the demo
-    # labels them as simulated.
-    simulated_slot_ms: dict = field(
-        default_factory=lambda: {"embedding": 95.0, "events": 110.0, "prosody": 40.0}
-    )
+    fleet_timeout_s: float = 2.0       # fleet-sync network timeout (tunable, not a magic literal)
 
     def resolved_backend(self) -> str:
         return detect_backend() if self.backend == "auto" else self.backend
