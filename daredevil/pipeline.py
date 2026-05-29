@@ -19,6 +19,7 @@ from .audio.capture import capture
 from .audio.utils import resample
 from .stage1.mic_arrays import MicArray, detect as detect_array
 from .stage1.spatial import Stage1, SpatialSource
+from .stage1.separation import Separator
 from .stage2.embedding import EmbeddingSlot
 from .stage2.events import EventsSlot
 from .stage2.prosody import ProsodySlot
@@ -51,6 +52,7 @@ class Pipeline:
 
         self.array = array or detect_array()
         self.stage1 = Stage1(self.config.inference_sr)
+        self.separator = Separator(backend=slot_backend)
 
         self.slots: Dict[str, object] = {}
         for name in self.config.enabled_slots:
@@ -70,6 +72,7 @@ class Pipeline:
 
     # ------------------------------------------------------------------ setup
     def warmup(self) -> None:
+        self.separator.warmup()
         for slot in self.slots.values():
             slot.warmup()
 
@@ -102,7 +105,25 @@ class Pipeline:
         self.warmup()
         cap = capture(seconds=duration, sr=self.config.capture_rate,
                       source=source, file=file, array=self.array, scene=scene)
-        sources: List[SpatialSource] = self.stage1.process(cap)
+        spatial_sources: List[SpatialSource] = self.stage1.process(cap)
+
+        # --- Stage 1.5: source separation
+        # For each spatial source, separate into individual streams.
+        # Synthetic scenes already have per-source audio (from scene_truth).
+        sources: List[SpatialSource] = []
+        for src in spatial_sources:
+            if src.truth is not None:
+                # Synthetic: already separated, pass through
+                sources.append(src)
+            else:
+                # Real audio: separate into individual streams
+                separated = self.separator.separate(src.audio, src.sr)
+                for stream in separated:
+                    sources.append(SpatialSource(
+                        audio=stream["audio"], sr=stream["sr"],
+                        azimuth=src.azimuth, elevation=src.elevation,
+                        truth=None,
+                    ))
 
         # --- Stage 2: parallel pass (this is the one we report results from)
         t0 = time.perf_counter()

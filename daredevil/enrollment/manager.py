@@ -120,16 +120,20 @@ class EnrollmentManager:
             frame_score = self._score_calibrated(vector, rec["vector"], others)
 
             # Quality gate — weight by energy
-            quality = min(1.0, energy / 0.005) if energy > 0 else 0.1
+            quality = min(1.0, energy / 0.003) if energy > 0 else 0.1
             weighted_score = frame_score * quality
 
-            # LLR accumulation with decay (SPRT)
+            # LLR accumulation — slow decay, strong build (name-that-tune)
+            # Positive scores build fast, negative scores decay slow
             prev = self._llr.get(name, 0.0)
-            self._llr[name] = prev * 0.92 + weighted_score * 0.35
+            if weighted_score > 0:
+                self._llr[name] = prev * 0.97 + weighted_score * 0.5
+            else:
+                self._llr[name] = prev * 0.97 + weighted_score * 0.1
 
-            # Confidence: sigmoid of accumulated LLR mapped to [0, 1]
+            # Confidence: sigmoid centered at 1.5 (need ~4-5 good frames to cross 0.70)
             accumulated = self._llr[name]
-            confidence = 1.0 / (1.0 + math.exp(-accumulated))
+            confidence = 1.0 / (1.0 + math.exp(-(accumulated - 1.5)))
 
             if confidence > best_conf:
                 best_conf = confidence
