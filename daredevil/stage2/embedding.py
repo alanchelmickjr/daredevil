@@ -53,8 +53,10 @@ class EmbeddingSlot(Slot):
             try:
                 import torch
 
-                wav = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
-                emb = self._classifier.encode_batch(wav).squeeze().detach().cpu().tolist()
+                sig = torch.tensor(audio, dtype=torch.float32)
+                sig = self._classifier.audio_normalizer(sig, sr)
+                emb = self._classifier.encode_batch(sig.unsqueeze(0), normalize=True)
+                emb = emb.squeeze().detach().cpu().tolist()
                 if isinstance(emb, float):
                     emb = [emb]
                 return {"vector": emb, "dim": len(emb), "backend": "reference"}

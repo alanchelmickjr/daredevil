@@ -29,7 +29,7 @@ class EnrollmentManager:
     def _mean_embedding(self, audio: List[float], sr: int, win: float = 1.0) -> List[float]:
         n = int(win * sr)
         chunks = [audio] if len(audio) <= n else [audio[i:i + n] for i in range(0, len(audio) - n + 1, n)]
-        vecs = [self.slot.run(c, sr)["vector"] for c in chunks if rms(c) > 1e-4]
+        vecs = [self.slot.run(c, sr)["vector"] for c in chunks if rms(c) > self.config.thresholds.vad]
         if not vecs:
             vecs = [self.slot.run(audio, sr)["vector"]]
         dim = len(vecs[0])
