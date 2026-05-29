@@ -64,6 +64,10 @@ DEFAULT_SCENE = [
      "azimuth": 0.0, "elevation": 0.0, "prosody_state": "calm", "distress": 0.12},
     {"name": None, "enrolled": False, "class": "baby_cry",
      "azimuth": 45.0, "elevation": 10.0, "prosody_state": "distressed", "distress": 0.95},
+    # the "radio": heard, tracked, structured — but the attention gate keeps it out
+    # of the conversation. This is the source that proves the point.
+    {"name": None, "enrolled": False, "class": "music",
+     "azimuth": 270.0, "elevation": 0.0, "prosody_state": "calm", "distress": 0.05},
 ]
 
 
@@ -148,6 +152,13 @@ def synthetic_scene(seconds: float = 1.0, sr: int = 16000,
         t = dict(s)
         t["audio"] = sig
         truth.append(t)
+    # broadband noise floor so the scene reads like a real (noisy) room. This only
+    # affects the mix used for visualization / the real-audio path — synthetic slots
+    # read each source's clean audio from scene_truth, so identity is unaffected.
+    nrng = random.Random(1337)
+    noise = 0.05
+    mix = [max(-1.0, min(1.0, v + nrng.uniform(-noise, noise))) for v in mix]
+
     # replicate the mix across channels (per-source audio is carried in scene_truth)
     channels = [list(mix) for _ in range(max(1, arr.n_mics))]
     return CaptureResult(channels=channels, sample_rate=sr, array=arr,
@@ -206,11 +217,12 @@ def capture_live(seconds: float = 1.0, sr: int = 48000,
 
 def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
             file: Optional[str] = None, array: Optional[MicArray] = None,
-            name: Optional[str] = None) -> CaptureResult:
+            name: Optional[str] = None, scene: Optional[List[dict]] = None) -> CaptureResult:
     """Dispatch to the right capture path.
 
     source: "auto" | "live" | "file" | "synthetic"
       - auto: live mic if available, else synthetic scene.
+      - scene: optional custom source list for the synthetic scene (e.g. a crowd).
     """
     if source == "file" or (source == "auto" and file):
         if not file:
@@ -219,7 +231,7 @@ def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
     if source == "synthetic":
         if name:
             return synthetic_voice(name, seconds, sr, array)
-        return synthetic_scene(seconds, sr, array)
+        return synthetic_scene(seconds, sr, array, sources=scene)
     if source == "live":
         return capture_live(seconds, sr, array)
     # auto
@@ -228,4 +240,4 @@ def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
     except Exception:
         if name:
             return synthetic_voice(name, seconds, sr, array)
-        return synthetic_scene(seconds, sr, array)
+        return synthetic_scene(seconds, sr, array, sources=scene)

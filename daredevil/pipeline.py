@@ -97,10 +97,11 @@ class Pipeline:
 
     # ----------------------------------------------------------------- listen
     def listen(self, duration: float = 1.0, source: str = "auto",
-               file: Optional[str] = None) -> dict:
+               file: Optional[str] = None, return_audio: bool = False,
+               scene: Optional[list] = None):
         self.warmup()
         cap = capture(seconds=duration, sr=self.config.capture_rate,
-                      source=source, file=file, array=self.array)
+                      source=source, file=file, array=self.array, scene=scene)
         sources: List[SpatialSource] = self.stage1.process(cap)
 
         # --- Stage 2: parallel pass (this is the one we report results from)
@@ -151,8 +152,12 @@ class Pipeline:
         if self.config.simulate_latency:
             timing["simulated"] = True
 
-        return self.router.build(records, datetime.now().isoformat(), timing,
+        amap = self.router.build(records, datetime.now().isoformat(), timing,
                                  cap.array, self.config.resolved_backend())
+        if return_audio:
+            # audio returned transiently for visualization only; never persisted.
+            return amap, cap.mono, cap.sample_rate
+        return amap
 
     # ----------------------------------------------------------------- helper
     def _run_slot(self, slot, audio, sr, ctx):

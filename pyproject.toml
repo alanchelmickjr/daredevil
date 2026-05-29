@@ -48,8 +48,15 @@ daredevil = "daredevil.cli:main"
 Homepage = "https://github.com/alanchelmickjr/daredevil"
 Repository = "https://github.com/alanchelmickjr/daredevil"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 include = ["daredevil*"]
+
+[tool.setuptools.package-data]
+"daredevil.viz" = ["web/*.html", "web/*.css", "web/*.js"]
+"daredevil.fleet" = ["gun-relay/*.js", "gun-relay/*.json", "gun-relay/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

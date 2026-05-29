@@ -133,38 +133,46 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 # --- internal -------------------------------------------------------------
 
-def _decimate(signal: Sequence[float], target: int = 1024) -> List[float]:
-    if len(signal) <= target:
-        return list(signal)
-    step = len(signal) / target
-    return [signal[int(i * step)] for i in range(target)]
+_ANALYSIS_SR = 4000    # fixed analysis rate -> fingerprint is clip-length & rate invariant
+_ANALYSIS_WIN = 1.0    # seconds analyzed, anchored to the start of the clip
 
 
 def _dft_mag(signal: Sequence[float], sr: int, n_bins: int):
-    """Magnitude spectrum at `n_bins` log-spaced frequencies (~60Hz .. sr/2)."""
-    x = _decimate(signal, 1024)
-    n = len(x)
-    if n == 0:
+    """Magnitude spectrum at `n_bins` log-spaced physical freqs (60Hz .. ~2kHz).
+
+    Computed over a fixed-duration window resampled to a fixed analysis rate, so
+    the result reflects the source's *spectral content*, not the clip length —
+    which is what lets a 3s enrollment match a 1s or 1.5s identification.
+    """
+    if not signal:
         return [0.0] * n_bins, [0.0] * n_bins
-    f_lo, f_hi = 60.0, max(120.0, sr / 2.0)
+    win_n = int(_ANALYSIS_WIN * sr)
+    win = list(signal[:win_n]) if len(signal) > win_n else list(signal)
+    xa = resample(win, sr, _ANALYSIS_SR)
+    n = int(_ANALYSIS_WIN * _ANALYSIS_SR)
+    if len(xa) < n:
+        xa = xa + [0.0] * (n - len(xa))
+    else:
+        xa = xa[:n]
+    f_lo, f_hi = 60.0, _ANALYSIS_SR / 2.0
     freqs = [f_lo * (f_hi / f_lo) ** (k / max(1, n_bins - 1)) for k in range(n_bins)]
     if _np is not None:
-        xa = _np.asarray(x, dtype=float)
+        xv = _np.asarray(xa, dtype=float)
         idx = _np.arange(n)
         mags = []
         for f in freqs:
-            ang = -2.0 * math.pi * f * idx / sr
-            re = float(_np.dot(xa, _np.cos(ang)))
-            im = float(_np.dot(xa, _np.sin(ang)))
+            ang = -2.0 * math.pi * f * idx / _ANALYSIS_SR
+            re = float(xv.dot(_np.cos(ang)))
+            im = float(xv.dot(_np.sin(ang)))
             mags.append(math.hypot(re, im))
         return mags, freqs
     mags = []
     for f in freqs:
-        w = -2.0 * math.pi * f / sr
+        w = -2.0 * math.pi * f / _ANALYSIS_SR
         re = im = 0.0
         for i in range(n):
             ang = w * i
-            re += x[i] * math.cos(ang)
-            im += x[i] * math.sin(ang)
+            re += xa[i] * math.cos(ang)
+            im += xa[i] * math.sin(ang)
         mags.append(math.hypot(re, im))
     return mags, freqs

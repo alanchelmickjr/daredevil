@@ -97,6 +97,7 @@ class Thresholds:
     unknown_track: float = 0.65    # cosine to consider two unknown frames the same source
     vad: float = 0.012             # energy gate for "is anyone speaking"
     enroll_tau: float = 3.0        # tau_enroll — enrollment confidence time constant (s)
+    surface: float = 0.45          # priority at/above which a source is routed to the LLM
 
 
 def default_data_dir() -> Path:
@@ -153,6 +154,10 @@ class Config:
     # behaviour
     allow_cloud: bool = False      # hard guarantee: no network egress for inference
     simulate_latency: bool = False  # illustrate parallel-vs-sequential on bare machines
+
+    # focus control
+    wake_word: str = "Hey Radar"   # local wake word (openWakeWord) to grab/steer focus
+    focus: Optional[str] = None    # active focus hint (azimuth label or source id), if any
 
     # tuning
     weights: PriorityWeights = field(default_factory=PriorityWeights)

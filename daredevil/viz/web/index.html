@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Daredevil — seeing with sound</title>
+<style>
+:root{
+  --bg:#15110c; --panel:#1d1812; --brass:#c08a3e; --brass-lite:#e6b566;
+  --ink:#e8dcc2; --dim:#6b5d47; --grn:#5ef0a0; --red:#ff5a6e;
+  --sd:#0a0805; --sl:#2a2218;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{overflow:hidden;color:var(--ink);font-family:Georgia,'Times New Roman',serif;
+  background:radial-gradient(circle at 50% 42%, #241c12 0%, #15110c 60%, #0c0a07 100%);}
+.topbar{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;
+  align-items:center;padding:14px 22px;z-index:30}
+.title{font-size:20px;letter-spacing:3px;color:var(--brass-lite);text-shadow:0 1px 0 #000}
+.title small{display:block;font-size:10px;color:var(--dim);letter-spacing:4px;margin-top:2px}
+.chips{display:flex;gap:12px;align-items:center}
+.chip{background:var(--panel);border:1px solid #3a2f1f;border-radius:20px;padding:7px 14px;
+  font-size:12px;color:var(--brass-lite);
+  box-shadow:inset 2px 2px 5px var(--sd),inset -2px -2px 5px var(--sl)}
+.stage{position:relative;width:100vw;height:100vh}
+.ring{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:1px solid #3a2f1f;
+  border-radius:50%;box-shadow:inset 0 0 50px rgba(0,0,0,.55)}
+.core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:152px;height:152px;
+  border-radius:50%;cursor:pointer;z-index:20;border:2px solid #6e4a1f;
+  background:radial-gradient(circle at 38% 30%, #e0ad5d, #9c6a2c 58%, #5c3d18);
+  box-shadow:9px 9px 20px var(--sd), -7px -7px 16px var(--sl), inset 0 0 20px rgba(0,0,0,.4);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:#2a1c0a;text-align:center;transition:transform .1s}
+.core:active{transform:translate(-50%,-50%) scale(.96)}
+.core b{font-size:18px;letter-spacing:2px}
+.core span{font-size:10px;color:#3a2810;letter-spacing:1px;margin-top:2px}
+.core::after{content:"";position:absolute;width:176px;height:176px;border-radius:50%;
+  border:1px solid var(--brass);opacity:.4;animation:pulse 2.6s infinite}
+@keyframes pulse{0%{transform:scale(.9);opacity:.55}100%{transform:scale(1.3);opacity:0}}
+svg.links{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-events:none}
+.card{position:absolute;width:188px;transform:translate(-50%,-50%);z-index:10;padding:10px 12px;
+  border-radius:14px;border:1px solid #3a2f1f;cursor:pointer;
+  background:linear-gradient(145deg,#221b13,#191309);
+  box-shadow:6px 6px 14px var(--sd), -5px -5px 12px var(--sl);
+  transition:opacity .6s ease, left .5s ease, top .5s ease}
+.card.ambient{opacity:.42;filter:saturate(.35)}
+.card.surface{border-color:var(--brass)}
+.card.safety{border-color:var(--red);box-shadow:0 0 20px rgba(255,90,110,.45),6px 6px 14px var(--sd)}
+.card .hd{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--brass-lite)}
+.card .who{font-weight:bold}
+.card.safety .who{color:var(--red)}
+.card canvas{width:100%;height:34px;display:block;margin:7px 0 3px}
+.card .ft{font-size:11px;opacity:.85}
+.card .bar{height:5px;border-radius:3px;background:#0c0a07;margin-top:6px;overflow:hidden;
+  box-shadow:inset 1px 1px 2px #000}
+.card .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),var(--brass-lite))}
+.card .gate{font-size:10px;margin-top:5px;letter-spacing:1px}
+.card.surface .gate{color:var(--grn)}
+.card.ambient .gate{color:var(--dim)}
+.bubble{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:40;display:none;
+  background:var(--panel);border:1px solid var(--brass);border-radius:10px;padding:11px 18px;
+  max-width:62%;font-size:13px;color:var(--ink);box-shadow:6px 6px 16px var(--sd)}
+.legend{position:fixed;bottom:12px;left:18px;font-size:11px;color:var(--dim);z-index:30}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="title">DAREDEVIL<small>SEEING WITH SOUND</small></div>
+  <div class="chips">
+    <div class="chip" id="wake">🎙 Hey Radar</div>
+    <div class="chip">on-device · no cloud</div>
+  </div>
+</div>
+<div class="stage" id="stage">
+  <svg class="links" id="links"></svg>
+  <div class="core" id="core"><b>DAREDEVIL</b><span>tap to talk</span></div>
+</div>
+<div class="bubble" id="bubble"></div>
+<div class="legend">green → routed to the LLM · grey dashed → heard, gated out · red → safety override · click a source to transcribe</div>
+<script>
+const stage=document.getElementById('stage'),links=document.getElementById('links'),
+  core=document.getElementById('core'),bubble=document.getElementById('bubble'),
+  wake=document.getElementById('wake');
+let cards={}, seen={};
+const FREQ={speech:3,baby_cry:7,alarm:9,siren:8,music:5};
+function rings(){const cx=innerWidth/2,cy=innerHeight/2,base=Math.min(cx,cy);
+  [0.4,0.7,1.0].forEach(f=>{const d=base*2*f,r=document.createElement('div');
+    r.className='ring';r.style.width=d+'px';r.style.height=d+'px';stage.appendChild(r);});}
+function pos(az,priority){const cx=innerWidth/2,cy=innerHeight/2,base=Math.min(cx,cy);
+  const R=base*(0.46+0.40*(1-priority)),a=az*Math.PI/180;
+  return [cx+R*Math.sin(a), cy-R*Math.cos(a)];}
+function waveDraw(cv,freq,col){const ctx=cv.getContext('2d');let t=0;
+  function f(){const w=cv.width=cv.clientWidth,h=cv.height=34;ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.beginPath();
+    for(let x=0;x<w;x++){const y=h/2+Math.sin(x/w*freq*6.28+t)*Math.sin(x/w*3.14)*h*0.36;
+      x?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();t+=0.16;cv._raf=requestAnimationFrame(f);}
+  cancelAnimationFrame(cv._raf||0);f();}
+function render(map){
+  const now=Date.now(),cx=innerWidth/2,cy=innerHeight/2;links.innerHTML='';
+  (map.sources||[]).forEach(s=>{
+    seen[s.id]=now;
+    const surfaced=s.attention==='surface',safety=s.event&&s.event.safety_critical;
+    const col=safety?'#ff5a6e':(surfaced?'#5ef0a0':'#6b5d47');
+    let c=cards[s.id];
+    if(!c){c=document.createElement('div');c.className='card';stage.appendChild(c);
+      c.innerHTML='<div class="hd"><span class="who"></span><span class="pr"></span></div>'
+        +'<canvas></canvas><div class="ft"></div><div class="bar"><i></i></div><div class="gate"></div>';
+      c.onclick=()=>probe(s.id);cards[s.id]=c;
+      waveDraw(c.querySelector('canvas'),FREQ[s.event.class]||4,col);}
+    c.className='card '+(surfaced?'surface':'ambient')+(safety?' safety':'');
+    const [x,y]=pos((s.position&&s.position.azimuth)||0,s.priority);
+    c.style.left=x+'px';c.style.top=y+'px';
+    c.querySelector('.who').textContent=(safety?'⚠ ':'')+s.id;
+    c.querySelector('.pr').textContent='p='+Number(s.priority).toFixed(2);
+    c.querySelector('.ft').textContent=s.event.class+' · '+s.prosody.state;
+    c.querySelector('.bar i').style.width=Math.round(s.priority*100)+'%';
+    c.querySelector('.gate').textContent=surfaced?'→ ROUTED TO LLM':'gated · ambient';
+    const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+    ln.setAttribute('x1',cx);ln.setAttribute('y1',cy);ln.setAttribute('x2',x);ln.setAttribute('y2',y);
+    ln.setAttribute('stroke',col);ln.setAttribute('stroke-width',surfaced?'2':'1');
+    ln.setAttribute('opacity',surfaced?'0.6':'0.22');
+    if(!surfaced)ln.setAttribute('stroke-dasharray','5 5');
+    links.appendChild(ln);
+  });
+  Object.keys(cards).forEach(id=>{if(now-(seen[id]||0)>4000){cards[id].remove();delete cards[id];}});
+  if(map.wake_word)wake.textContent='🎙 '+map.wake_word;
+}
+function say(html,ms){bubble.style.display='block';bubble.innerHTML=html;
+  clearTimeout(bubble._t);bubble._t=setTimeout(()=>bubble.style.display='none',ms||4500);}
+function probe(id){fetch('/probe?id='+encodeURIComponent(id)).then(r=>r.json())
+  .then(d=>say('<b>'+d.id+' → LLM (STT)</b><br>'+d.transcript)).catch(()=>{});}
+core.onclick=()=>say('<b>focus</b><br>listening for your command… (push-to-talk)',2600);
+function poll(){fetch('/awareness').then(r=>r.json()).then(render).catch(()=>{});}
+rings();poll();setInterval(poll,1200);
+addEventListener('resize',()=>{document.querySelectorAll('.ring').forEach(r=>r.remove());rings();});
+</script>
+</body>
+</html>

@@ -33,6 +33,7 @@ class AttentionRouter:
                 "n_mics": array.n_mics,
                 "spatial": array.spatial_capable,
             },
+            "routed_to_llm": [s["id"] for s in sources if s["attention"] == "surface"],
             "sources": sources,
             "timing": timing,
             "privacy": {
@@ -64,6 +65,14 @@ class AttentionRouter:
             priority, override = max(raw, 0.85), "DISTRESS"
         priority = max(0.0, min(1.0, priority))
 
+        # The attention gate — the whole point. A struct is built for EVERY source,
+        # but only some are surfaced to the conversational LLM: a safety/distress
+        # override, the enrolled owner actually speaking (directed), or anything
+        # above the surface threshold. Everything else is "ambient" — heard,
+        # tracked, and deliberately NOT sent into the conversation.
+        directed = enrolled and ev.get("class") == "speech"
+        surfaced = bool(override) or directed or (priority >= self.th.surface)
+
         event_out = {"class": ev["class"], "confidence": round(ev["confidence"], 3)}
         if ev.get("safety_critical"):
             event_out["safety_critical"] = True
@@ -71,6 +80,7 @@ class AttentionRouter:
         src = {
             "id": ident["name"] if enrolled else r.get("unknown_id", "UNKNOWN-000"),
             "type": "enrolled" if enrolled else "unknown",
+            "attention": "surface" if surfaced else "ambient",
             "event": event_out,
             "prosody": {"state": pr["state"], "distress": round(s_prosody, 3)},
             "priority": round(priority, 3),
@@ -87,3 +97,12 @@ class AttentionRouter:
         if override:
             src["priority_override"] = override
         return src
+
+
+def llm_payload(amap: dict) -> List[dict]:
+    """The sources the attention gate actually surfaces to the conversational LLM.
+
+    A struct is built for every detected source (full internal awareness); only
+    these cross the gate into the conversation. This is the point of the system.
+    """
+    return [s for s in amap.get("sources", []) if s.get("attention") == "surface"]

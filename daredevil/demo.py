@@ -35,7 +35,8 @@ def add_demo_args(parser: argparse.ArgumentParser) -> None:
                              "illustrate the parallel speedup on a machine without the models")
     parser.add_argument("--fallback", action="store_true", help="force the pure-Python backend")
     parser.add_argument("--no-viz", action="store_true", help="skip the on-screen radar")
-    parser.add_argument("--save-png", help="also save the awareness map as a PNG (needs matplotlib)")
+    parser.add_argument("--save-png", help="also save the awareness map radar as a PNG (needs matplotlib)")
+    parser.add_argument("--spectrogram", help="render the spectrogram + awareness overlay to PNG (needs matplotlib)")
     parser.add_argument("--json", action="store_true", help="print only the awareness map JSON")
 
 
@@ -83,13 +84,30 @@ def run_demo(args: argparse.Namespace) -> int:
 
     # 2) Listen — the awareness map.
     print(f"▶ listening ({args.duration:.0f}s window) ...\n")
-    amap = pipe.listen(duration=args.duration, source=listen_source, file=args.file)
+    _audio = _sr = None
+    if args.spectrogram:
+        amap, _audio, _sr = pipe.listen(duration=args.duration, source=listen_source,
+                                        file=args.file, return_audio=True)
+    else:
+        amap = pipe.listen(duration=args.duration, source=listen_source, file=args.file)
 
     print("── AWARENESS MAP (this is what the LLM receives) " + "─" * 14)
     print(json.dumps(amap, indent=2))
     print()
     if amap["timing"].get("simulated"):
         print("  ⓘ timing is simulated (representative model latencies) — real backends are measured live\n")
+
+    # The attention gate — a struct is built for every source, but only some reach
+    # the conversational LLM. This is the point of the system.
+    from .stage3.router import llm_payload
+    sent = llm_payload(amap)
+    print("  ATTENTION GATE → routed to the LLM: "
+          + (", ".join(f"{s['id']} ({s['event']['class']})" for s in sent) or "nothing"))
+    ambient = [s for s in amap["sources"] if s.get("attention") != "surface"]
+    if ambient:
+        print("  heard, tracked, gated OUT (ambient): "
+              + ", ".join(f"{s['id']} ({s['event']['class']})" for s in ambient))
+    print()
 
     if not args.no_viz:
         print(render_ascii(amap))
