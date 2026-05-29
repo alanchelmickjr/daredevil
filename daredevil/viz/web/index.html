@@ -200,8 +200,11 @@ function probe(id){fetch('/probe?id='+encodeURIComponent(id)).then(r=>r.json())
   .then(d=>say(d.implemented===false ? ('<b>'+d.id+'</b><br>TODO: '+d.todo)
                                      : ('<b>'+d.id+' → LLM</b><br>'+d.transcript))).catch(()=>{});}
 core.onclick=()=>say('<b>focus</b><br>listening for your command… (push-to-talk)');
-function poll(){fetch('/awareness').then(r=>r.json()).then(render).catch(()=>{});}
-rings();poll();setInterval(poll,POLL_MS);
+function poll(){
+  fetch('/awareness',{signal:AbortSignal.timeout(5000)})
+    .then(r=>r.json()).then(d=>{render(d);setTimeout(poll,POLL_MS);})
+    .catch(()=>{setTimeout(poll,POLL_MS*2);});}
+rings();poll();
 addEventListener('resize',()=>{document.querySelectorAll('.ring').forEach(r=>r.remove());rings();});
 </script>
 </body>
