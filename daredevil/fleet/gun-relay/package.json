@@ -1,0 +1,15 @@
+{
+  "name": "daredevil-gun-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal Gun.js peer — decentralized, encrypted, offline-first identity backbone for Daredevil. Not a cloud server.",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node relay.js"
+  },
+  "dependencies": {
+    "gun": "^0.2020.1240"
+  }
+}

@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daredevil"
+version = "0.1.0"
+description = "Local, private acoustic context for LLMs — WHO is speaking, WHERE, WHAT, and HOW, computed on-device."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Alan Helmick Jr." }]
+keywords = [
+    "audio", "speaker-identification", "sound-event-detection", "prosody",
+    "spatial-audio", "edge-ai", "on-device", "privacy", "llm-context",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+]
+# The CORE runs on the Python standard library alone — zero required deps.
+# Everything heavier is an opt-in extra so `pip install daredevil` is light and
+# the demo runs anywhere, then accelerates when backends are installed.
+dependencies = []
+
+[project.optional-dependencies]
+audio = ["sounddevice", "soundfile"]
+spatial = ["numpy", "scipy", "pyroomacoustics"]
+speaker = ["torch", "torchaudio", "speechbrain"]          # Slot A — WHO (ECAPA, Apache-2.0)
+events = ["panns-inference", "numpy", "librosa"]          # Slot B — WHAT (PANNs CNN14)
+prosody = ["librosa", "numpy"]                            # Slot C — HOW (permissive)
+viz = ["matplotlib"]
+crypto = ["cryptography"]                                 # AES at-rest for voiceprints
+full = [
+    "numpy", "scipy", "torch", "torchaudio", "speechbrain", "panns-inference",
+    "librosa", "pyroomacoustics", "sounddevice", "soundfile", "matplotlib", "cryptography",
+]
+dev = ["pytest"]
+
+[project.scripts]
+daredevil = "daredevil.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/alanchelmickjr/daredevil"
+Repository = "https://github.com/alanchelmickjr/daredevil"
+
+[tool.setuptools.packages.find]
+include = ["daredevil*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

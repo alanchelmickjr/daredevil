@@ -1,0 +1,120 @@
+"""Core plumbing tests — all run on pure stdlib (no heavy deps required).
+
+These pin the deterministic guarantees: the enrollment confidence curve, cosine
+similarity, the priority math + safety/distress overrides, UNKNOWN-NNN tracking,
+and an end-to-end synthetic listen producing a valid awareness map.
+"""
+import math
+
+import pytest
+
+from daredevil import Pipeline
+from daredevil.config import Config, is_safety_critical
+from daredevil.audio.utils import cosine, fingerprint
+from daredevil.enrollment.manager import enrollment_confidence
+from daredevil.stage3.router import AttentionRouter
+from daredevil.stage3.tracker import UnknownTracker
+
+
+def test_enrollment_confidence_curve():
+    # Patent: C(t) = 1 - exp(-t/3). 3s≈0.63, 10s≈0.96, 20s≈0.999.
+    assert enrollment_confidence(3) == pytest.approx(0.632, abs=0.01)
+    assert enrollment_confidence(10) == pytest.approx(0.964, abs=0.01)
+    assert enrollment_confidence(20) == pytest.approx(0.999, abs=0.005)
+
+
+def test_cosine_basics():
+    assert cosine([1, 0, 0], [1, 0, 0]) == pytest.approx(1.0)
+    assert cosine([1, 0], [0, 1]) == pytest.approx(0.0)
+    assert cosine([1, 0], [-1, 0]) == pytest.approx(-1.0)
+
+
+def test_fingerprint_stable_and_discriminative():
+    import random
+    rng = random.Random(0)
+    a = [math.sin(2 * math.pi * 150 * i / 16000) for i in range(16000)]
+    a_noisy = [v + rng.uniform(-0.01, 0.01) for v in a]
+    b = [math.sin(2 * math.pi * 480 * i / 16000) for i in range(16000)]
+    fa, fa2, fb = (fingerprint(a, 16000), fingerprint(a_noisy, 16000), fingerprint(b, 16000))
+    assert cosine(fa, fa2) > 0.95        # same source, stable
+    assert cosine(fa, fb) < cosine(fa, fa2)  # different source, less similar
+
+
+def test_is_safety_critical():
+    assert is_safety_critical("baby_cry")
+    assert is_safety_critical("Baby cry, infant cry")
+    assert is_safety_critical("Smoke detector, smoke alarm")
+    assert not is_safety_critical("speech")
+    assert not is_safety_critical("")
+
+
+def test_router_safety_override_pins_priority():
+    r = AttentionRouter(Config())
+    rec = {
+        "identity": None, "unknown_id": "UNKNOWN-001",
+        "event": {"class": "baby_cry", "confidence": 0.95, "safety_critical": True},
+        "prosody": {"state": "distressed", "distress": 0.9},
+        "position": {"azimuth": 45.0, "elevation": 0.0},
+    }
+    amap = r.build([rec], "t", {"parallel_ms": 1, "sequential_ms": 2}, _Arr(), "fallback")
+    src = amap["sources"][0]
+    assert src["type"] == "unknown"
+    assert src["priority"] == 1.0
+    assert src["priority_override"] == "SAFETY_CRITICAL"
+    assert amap["privacy"]["cloud_used"] is False
+
+
+def test_router_distress_escalates_enrolled_speaker():
+    r = AttentionRouter(Config())
+    rec = {
+        "identity": {"name": "alan", "score": 0.9, "enrollment_confidence": 0.96},
+        "event": {"class": "speech", "confidence": 0.97, "safety_critical": False},
+        "prosody": {"state": "distressed", "distress": 0.8},
+        "position": None,
+    }
+    amap = r.build([rec], "t", {"parallel_ms": 1, "sequential_ms": 2}, _Arr(), "fallback")
+    src = amap["sources"][0]
+    assert src["type"] == "enrolled" and src["id"] == "alan"
+    assert src["priority_override"] == "DISTRESS"
+    assert src["priority"] >= 0.85
+
+
+def test_tracker_persistent_unknown_ids():
+    t = UnknownTracker(threshold=0.8)
+    v1 = fingerprint([math.sin(2 * math.pi * 150 * i / 16000) for i in range(8000)], 16000)
+    v2 = fingerprint([math.sin(2 * math.pi * 470 * i / 16000) for i in range(8000)], 16000)
+    id1 = t.assign(v1)
+    assert t.assign(v1) == id1          # same source -> same id
+    id2 = t.assign(v2)
+    assert id2 != id1                   # different source -> new id
+    assert id1 == "UNKNOWN-001" and id2 == "UNKNOWN-002"
+
+
+def test_end_to_end_synthetic(tmp_path):
+    from daredevil.stage1.mic_arrays import MACBOOK_3
+    cfg = Config(data_dir=str(tmp_path))
+    pipe = Pipeline(config=cfg, array=MACBOOK_3)
+
+    enr = pipe.enroll("alan", mic_seconds=3, source="synthetic")
+    assert enr["enrollment_confidence"] == pytest.approx(0.632, abs=0.01)
+
+    amap = pipe.listen(duration=1.0, source="synthetic")
+    assert amap["privacy"]["cloud_used"] is False
+    assert amap["array"]["spatial"] is True
+    ids = {s["id"]: s for s in amap["sources"]}
+
+    assert "alan" in ids and ids["alan"]["type"] == "enrolled"
+    assert ids["alan"]["identity"]["match_score"] > 0.7   # fallback fingerprint identifies
+
+    baby = [s for s in amap["sources"] if s["event"]["class"] == "baby_cry"][0]
+    assert baby["type"] == "unknown"
+    assert baby["priority"] == 1.0
+    assert baby["priority_override"] == "SAFETY_CRITICAL"
+    # safety-critical source outranks the calm enrolled speaker
+    assert amap["sources"][0]["id"] == baby["id"]
+
+
+class _Arr:
+    name = "test"
+    n_mics = 3
+    spatial_capable = True
