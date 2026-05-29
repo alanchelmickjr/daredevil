@@ -112,6 +112,8 @@ def main(argv=None) -> int:
     psv.add_argument("--port", type=int, default=8770)
     psv.add_argument("--live", action="store_true")
 
+    sub.add_parser("mcp", help="run as an MCP server (stdio) for Claude / LLM agents")
+
     pb = sub.add_parser("bench", help="measure pipeline latency vs crowd size")
     pb.add_argument("--iters", type=int, default=10)
 
@@ -131,6 +133,10 @@ def main(argv=None) -> int:
     if args.cmd == "serve":
         from .viz.server import serve
         return serve(port=args.port, live=args.live)
+    if args.cmd == "mcp":
+        from .mcp_server import main as mcp_main
+        mcp_main()
+        return 0
     if args.cmd == "bench":
         return _cmd_bench(args)
     if args.cmd == "devices":

@@ -35,9 +35,10 @@ events = ["panns-inference", "numpy", "librosa"]          # Slot B — WHAT (PAN
 prosody = ["librosa", "numpy"]                            # Slot C — HOW (permissive)
 viz = ["matplotlib"]
 crypto = ["cryptography"]                                 # AES at-rest for voiceprints
+mcp = ["mcp"]                                             # MCP server for Claude / LLM agents
 full = [
     "numpy", "scipy", "torch", "torchaudio", "speechbrain", "panns-inference",
-    "librosa", "pyroomacoustics", "sounddevice", "soundfile", "matplotlib", "cryptography",
+    "librosa", "pyroomacoustics", "sounddevice", "soundfile", "matplotlib", "cryptography", "mcp",
 ]
 dev = ["pytest"]
 

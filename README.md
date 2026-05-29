@@ -197,9 +197,11 @@ pip install -e ".[viz]"      # matplotlib radar
 
 ---
 
-## Privacy is the point
+## Privacy is the point — and the law requires it
 
 Daredevil is **local-first and cloud-never** by design — `allow_cloud=False` is a hard default with no code path that sends audio or embeddings anywhere.
+
+**This isn't just good engineering — it's legally necessary.** Under COPPA and the California Age-Appropriate Design Code Act, transmitting, decoding, or identifying a child's voiceprint in the cloud is **illegal**. You cannot legally send a baby's cry or a child's voice to a cloud API for identification. Daredevil is the only architecture that can classify "baby_cry" as SAFETY_CRITICAL, identify that your kid is on your computer, or detect a child in distress — **without breaking federal law** — because the audio and embeddings never leave the device. Period.
 
 - **On-device inference.** No API keys. No network egress. (The previous cloud prosody API was removed in favor of fully-local analysis.)
 - **Non-reversible embeddings.** Identity is math, not recordings.
@@ -225,7 +227,9 @@ The premium tier is a small sensor module that adds what a laptop physically can
 - [x] Stage 3 router: priority scoring, safety + distress overrides, UNKNOWN-NNN tracking
 - [x] Structured JSON awareness map + terminal radar
 - [x] Local-first identity store + Gun fleet scaffold
-- [ ] Real model backends wired (ECAPA / PANNs / librosa) on MacBook
+- [x] Real model backends wired (ECAPA + librosa verified on MacBook MPS)
+- [x] MCP server — local tool for Claude Code / Claude Desktop / agents
+- [ ] PANNs CNN14 event classification (reference backend for WHAT)
 - [ ] Live multi-mic SRP-PHAT validated on hardware
 - [ ] ONNX Runtime portable backend (CoreML / TensorRT) + int8
 - [ ] Live Gun P2P voiceprint sync
@@ -235,12 +239,60 @@ Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
+## MCP server — give your AI agent ears
+
+Daredevil ships as an [MCP](https://modelcontextprotocol.io/) server. Any MCP-capable client (Claude Code, Claude Desktop, custom agents) can call it as a local tool — the agent gets structured acoustic awareness without audio ever leaving your machine.
+
+```bash
+pip install -e ".[mcp]"
+daredevil mcp                # stdio transport — Claude Code / Claude Desktop
+```
+
+**Tools exposed:**
+| Tool | What it returns |
+|---|---|
+| `listen` | Full awareness map (all sources, all slots) |
+| `awareness` | Only the sources that pass the attention gate — what the LLM should act on |
+| `enroll_speaker` | Enroll a new voice (name + seconds) |
+| `devices` | Installed backends, array, enrolled speakers |
+
+Configure in Claude Code (`.claude/settings.local.json`):
+```json
+{
+  "mcpServers": {
+    "daredevil": {
+      "command": "python",
+      "args": ["-m", "daredevil.mcp_server"]
+    }
+  }
+}
+```
+
+Now Claude can *hear the room* — locally, legally, privately.
+
+---
+
+## Projected features
+
+Identity unlocks things that aren't possible any other way — all on-device:
+
+- **Parental presence detection** — Know whether a child or an adult is using the device. Your kids can't use *your* Claude by typing a password; their voice isn't yours.
+- **Household safety net** — Detect a baby cry, a fall, a smoke alarm — and know *who* is (or isn't) nearby to respond.
+- **Speaker-aware conversation** — An agent that knows "Alan asked this, then his daughter asked that" can maintain separate contexts, enforce age-appropriate boundaries, and recall per-person preferences.
+- **Attention steering** — The wake word + voiceprint together let the agent know not just *that* someone spoke, but *who* and *whether it was directed at the agent*.
+- **Device handoff** — Enroll once, sync voiceprints P2P across your devices. Walk from your desk to the kitchen and the agent already knows it's you.
+
+All of this requires local voiceprint identification of minors — which is **illegal to do in the cloud** under COPPA and California law. Daredevil is the only legal path.
+
+---
+
 ## Commands
 
 ```bash
 python -m daredevil.demo               # full demo (synthetic scene)
 python -m daredevil.demo --live        # use your real microphone
 python -m daredevil serve              # web HUD at http://127.0.0.1:8770
+daredevil mcp                          # MCP server for Claude / LLM agents
 daredevil bench                        # crowd-scaling latency (→ LLM stays flat)
 daredevil enroll --name alan --seconds 10     # enroll a speaker
 daredevil listen --json                # one awareness map -> stdout
