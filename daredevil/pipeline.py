@@ -8,6 +8,8 @@ architecture, schema, and router are identical either way.
 """
 from __future__ import annotations
 
+import logging
+
 import importlib.util as _ilu
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +35,8 @@ SLOT_FACTORIES = {
     "events": EventsSlot,
     "prosody": ProsodySlot,
 }
+
+log = logging.getLogger("daredevil")
 
 _OPTIONAL_DEPS = [
     "numpy", "scipy", "torch", "torchaudio", "speechbrain", "panns_inference",
@@ -105,20 +109,20 @@ class Pipeline:
         self.warmup()
         cap = capture(seconds=duration, sr=self.config.capture_rate,
                       source=source, file=file, array=self.array, scene=scene)
+        from .audio.utils import rms as _rms_fn
+        log.info(f"capture: {cap.source} {cap.duration:.1f}s rms={_rms_fn(cap.mono):.4f}")
         spatial_sources: List[SpatialSource] = self.stage1.process(cap)
 
         # --- Stage 1.5: source separation
-        # For each spatial source, separate into individual streams.
-        # Synthetic scenes already have per-source audio (from scene_truth).
         sources: List[SpatialSource] = []
         for src in spatial_sources:
             if src.truth is not None:
-                # Synthetic: already separated, pass through
                 sources.append(src)
             else:
-                # Real audio: separate into individual streams
                 separated = self.separator.separate(src.audio, src.sr)
-                for stream in separated:
+                log.info(f"separation: {len(separated)} streams from 1 spatial source")
+                for i, stream in enumerate(separated):
+                    log.info(f"  stream {i}: energy={stream['energy']:.4f}")
                     sources.append(SpatialSource(
                         audio=stream["audio"], sr=stream["sr"],
                         azimuth=src.azimuth, elevation=src.elevation,
@@ -167,10 +171,13 @@ class Pipeline:
             if self.enrollment.is_match(match):
                 identity = {"name": match["name"], "score": match["score"],
                             "enrollment_confidence": match["enrollment_confidence"]}
+                log.info(f"  → MATCHED {match['name']} score={match['score']:.3f}")
             else:
                 unknown_id = self.tracker.assign(
                     emb, position=pos, event_class=ev.get("class"),
                     single_source=single_source)
+                llr_state = self.enrollment._llr.get("alan", 0)
+                log.info(f"  → {unknown_id} event={ev.get('class')} energy={energy:.4f} llr_alan={llr_state:.3f}")
 
             position = None
             if src.azimuth is not None:

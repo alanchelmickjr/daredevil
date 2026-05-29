@@ -12,6 +12,7 @@ fakes a transcript.
 from __future__ import annotations
 
 import json
+import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -82,6 +83,10 @@ def _make_handler(state: _State):
 
 
 def serve(port: int = 8770, live: bool = False, host: str = "127.0.0.1") -> int:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
     state = _State(live=live)
     httpd = ThreadingHTTPServer((host, port), _make_handler(state))
     scene = "live mic" if live else "synthetic scene"

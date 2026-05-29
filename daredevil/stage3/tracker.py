@@ -1,11 +1,10 @@
 """Unknown-source tracking — persistent UNKNOWN-NNN identifiers (patent Claim 6).
 
-Lets the system track an unidentified source across frames without enrolling it:
-two frames whose embeddings are similar enough get the same UNKNOWN-NNN id.
-
-For sources that can't be discriminated by embedding alone (e.g. a mono TV feed
-with multiple speakers), the tracker also considers spatial position and event
-class continuity — same position + same class = likely same physical source.
+Uses a slot-based assignment inspired by SORT (Simple Online Realtime Tracking):
+each frame's detections are assigned to existing tracks via best-match, with a
+low threshold for continuation (the same source sounds different frame to frame).
+Tracks have states: ACTIVE → DORMANT → removed. A source keeps its ID across
+silence gaps by staying DORMANT until heard again or timed out.
 """
 from __future__ import annotations
 
@@ -15,78 +14,84 @@ from typing import List, Optional, Sequence
 from ..audio.utils import cosine
 
 
-def _ema(old: Sequence[float], new: Sequence[float], alpha: float) -> List[float]:
-    n = min(len(old), len(new))
-    return [(1 - alpha) * old[i] + alpha * new[i] for i in range(n)]
-
-
 class UnknownTracker:
     def __init__(self, threshold: float = 0.65):
         self.threshold = threshold
-        self._sources: List[dict] = []
+        self._tracks: List[dict] = []
         self._counter = 0
+        self._max_dormant = 15.0  # seconds before a dormant track is removed
 
     def assign(self, vector: Sequence[float], position: Optional[dict] = None,
                event_class: Optional[str] = None, single_source: bool = False) -> str:
+        """Assign a detection to an existing track or create a new one.
+
+        Strategy: find the most recent active track. For mono/single-source,
+        the most recently active track gets priority — this handles the
+        "same physical source, different embeddings" case by trusting recency.
+        For multi-source, use cosine to discriminate.
+        """
         now = time.monotonic()
+        self._prune(now)
+
+        if not self._tracks:
+            return self._new_track(vector, now, event_class, position)
+
+        if single_source:
+            # Mono mic: only one physical source at a time. The most recent
+            # active track IS this source unless it's been dormant too long.
+            active = [t for t in self._tracks if now - t["last_seen"] < 5.0]
+            if active:
+                best = max(active, key=lambda t: t["last_seen"])
+                best["last_seen"] = now
+                best["event_class"] = event_class
+                best["hits"] += 1
+                return best["id"]
+            # Nothing recent — new source
+            return self._new_track(vector, now, event_class, position)
+
+        # Multi-source: use cosine + recency to find best match
         best, best_score = None, -1.0
-        for s in self._sources:
-            score = cosine(vector, s["vector"])
-            # boost for same event class (speech stays speech)
-            if event_class and s.get("event_class") == event_class:
-                score += 0.15
-            if position and s.get("position") == position:
-                score += 0.10
-            # recency boost
-            age = now - s.get("last_seen", now)
+        for t in self._tracks:
+            age = now - t["last_seen"]
+            if age > self._max_dormant:
+                continue
+            score = cosine(vector, t["vector"])
             if age < 3.0:
                 score += 0.10
-            # single mic continuity — but only for same event class
-            if single_source and age < 5.0 and event_class and s.get("event_class") == event_class:
-                score += 0.20
+            if event_class and t.get("event_class") == event_class:
+                score += 0.10
             if score > best_score:
-                best_score, best = score, s
+                best_score, best = score, t
 
-        # SPRT-style: don't spawn a new source on one bad frame.
-        # If the best source was recently active and close-ish, stick with it.
         if best is not None and best_score >= self.threshold:
-            # Only update the stored vector if the raw cosine (without boosts) is strong
-            raw = cosine(vector, best["vector"])
-            if raw >= 0.5:
-                best["vector"] = _ema(best["vector"], vector, 0.1)
-            best["hits"] += 1
+            best["vector"] = list(vector)
             best["last_seen"] = now
             best["event_class"] = event_class
-            best["position"] = position
-            best["misses"] = 0
+            best["hits"] += 1
             return best["id"]
 
-        # Near-miss: score is close but below threshold — give benefit of the doubt
-        # but only if the source was recently active (prevents permanent stickiness)
-        if best is not None and best_score >= self.threshold - 0.15:
-            age = now - best.get("last_seen", now)
-            if age < 5.0:
-                misses = best.get("misses", 0) + 1
-                best["misses"] = misses
-                if misses < 3:
-                    best["last_seen"] = now
-                    return best["id"]
+        return self._new_track(vector, now, event_class, position)
 
-        # Genuinely new source
+    def _new_track(self, vector, now, event_class, position) -> str:
         self._counter += 1
         sid = f"UNKNOWN-{self._counter:03d}"
-        self._sources.append({
+        self._tracks.append({
             "id": sid, "vector": list(vector), "hits": 1,
             "last_seen": now, "event_class": event_class, "position": position,
-            "misses": 0,
         })
         return sid
 
+    def _prune(self, now: float) -> None:
+        self._tracks = [t for t in self._tracks if now - t["last_seen"] < self._max_dormant]
+
     def prune(self, max_age: float = 30.0) -> None:
-        """Remove sources not seen recently."""
         now = time.monotonic()
-        self._sources = [s for s in self._sources if now - s.get("last_seen", now) < max_age]
+        self._tracks = [t for t in self._tracks if now - t.get("last_seen", now) < max_age]
+
+    @property
+    def _sources(self):
+        return self._tracks
 
     @property
     def count(self) -> int:
-        return len(self._sources)
+        return len(self._tracks)
