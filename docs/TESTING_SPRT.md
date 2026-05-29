@@ -38,7 +38,15 @@ If both hold, the decision math and the stitch are correct on the fallback path.
 ```bash
 conda activate daredevil
 daredevil devices                 # confirm: embedding=reference, backend=mps
-daredevil enroll --name alan -s 10 --live   # speak normally, normal distance
+
+# First-run: the "get to know each other" session. Seeds the identity model
+# from YOUR real voice + room (the human-tuned first copy). ~1 minute, hands-free.
+daredevil calibrate --name alan --live --others
+#   1/3 talk to it   2/3 stay quiet (room)   3/3 let a TV/2nd voice play
+#   -> writes ~/.daredevil/calibration.json; every Pipeline loads it automatically.
+#   From there it auto-tunes the background in real time (CFAR).
+
+daredevil enroll --name alan -s 10 --live   # (calibrate already enrolls; re-enroll only to refresh)
 daredevil serve --live            # HUD at http://127.0.0.1:8770
 # in another shell, watch the reasoning:
 #   daredevil serve --live > /tmp/dd.log 2>&1   &&   tail -f /tmp/dd.log
