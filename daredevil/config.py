@@ -155,6 +155,10 @@ class Config:
     allow_cloud: bool = False      # hard guarantee: no network egress for inference
     simulate_latency: bool = False  # illustrate parallel-vs-sequential on bare machines
 
+    # focus control
+    wake_word: str = "Hey Radar"   # local wake word (openWakeWord) to grab/steer focus
+    focus: Optional[str] = None    # active focus hint (azimuth label or source id), if any
+
     # tuning
     weights: PriorityWeights = field(default_factory=PriorityWeights)
     thresholds: Thresholds = field(default_factory=Thresholds)

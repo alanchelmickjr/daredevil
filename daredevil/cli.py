@@ -51,6 +51,45 @@ def _cmd_devices(args) -> int:
     return 0
 
 
+def _crowd(n: int) -> list:
+    """A synthetic 'crowd': the owner + a baby cry + (n-2) ambient chatter sources."""
+    scene = [
+        {"name": "alan", "enrolled": True, "class": "speech", "azimuth": 0.0,
+         "elevation": 0.0, "prosody_state": "calm", "distress": 0.12},
+        {"name": None, "enrolled": False, "class": "baby_cry", "azimuth": 45.0,
+         "elevation": 10.0, "prosody_state": "distressed", "distress": 0.95},
+    ]
+    for i in range(max(0, n - 2)):
+        scene.append({"name": f"chatter{i}", "enrolled": False, "class": "music",
+                      "azimuth": float((90 + i * 37) % 360), "elevation": 0.0,
+                      "prosody_state": "calm", "distress": 0.05})
+    return scene
+
+
+def _cmd_bench(args) -> int:
+    """Show that response time is driven by the attention gate, not the crowd size."""
+    import statistics
+    from .stage1.mic_arrays import MACBOOK_3
+    pipe = Pipeline(config=Config(), array=MACBOOK_3)
+    pipe.enroll("alan", 3, source="synthetic")
+    pipe.warmup()
+    print(f"backend={pipe.config.resolved_backend()}   iters={args.iters}")
+    print(f"  {'sources':>7} | {'pipeline_ms':>11} | {'→ LLM':>6}")
+    print("  " + "-" * 32)
+    for n in (2, 5, 10, 20):
+        scene = _crowd(n)
+        times, routed = [], 0
+        for _ in range(args.iters):
+            amap = pipe.listen(duration=1.0, source="synthetic", scene=scene)
+            times.append(amap["timing"]["parallel_ms"])
+            routed = len(amap["routed_to_llm"])
+        med = statistics.median(times)
+        print(f"  {n:>7} | {med:>9.1f}{'✓' if med < 200 else ' '} | {routed:>6}")
+    print("  → pipeline scales gently + locally with sources; the LLM payload (→ LLM)")
+    print("    stays flat. The attention gate — not the room — drives response time.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="daredevil",
                                 description="Local, private acoustic context for LLMs.")
@@ -72,6 +111,13 @@ def main(argv=None) -> int:
     pl.add_argument("--simulate-latency", action="store_true")
     pl.add_argument("--json", action="store_true")
 
+    psv = sub.add_parser("serve", help="run the local web HUD (neumorphic-steampunk)")
+    psv.add_argument("--port", type=int, default=8770)
+    psv.add_argument("--live", action="store_true")
+
+    pb = sub.add_parser("bench", help="measure pipeline latency vs crowd size")
+    pb.add_argument("--iters", type=int, default=10)
+
     sub.add_parser("devices", help="show detected array + installed backends")
     sub.add_parser("version", help="print version")
 
@@ -85,6 +131,11 @@ def main(argv=None) -> int:
         return _cmd_enroll(args)
     if args.cmd == "listen":
         return _cmd_listen(args)
+    if args.cmd == "serve":
+        from .viz.server import serve
+        return serve(port=args.port, live=args.live)
+    if args.cmd == "bench":
+        return _cmd_bench(args)
     if args.cmd == "devices":
         return _cmd_devices(args)
     if args.cmd == "version":

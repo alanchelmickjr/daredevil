@@ -217,11 +217,12 @@ def capture_live(seconds: float = 1.0, sr: int = 48000,
 
 def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
             file: Optional[str] = None, array: Optional[MicArray] = None,
-            name: Optional[str] = None) -> CaptureResult:
+            name: Optional[str] = None, scene: Optional[List[dict]] = None) -> CaptureResult:
     """Dispatch to the right capture path.
 
     source: "auto" | "live" | "file" | "synthetic"
       - auto: live mic if available, else synthetic scene.
+      - scene: optional custom source list for the synthetic scene (e.g. a crowd).
     """
     if source == "file" or (source == "auto" and file):
         if not file:
@@ -230,7 +231,7 @@ def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
     if source == "synthetic":
         if name:
             return synthetic_voice(name, seconds, sr, array)
-        return synthetic_scene(seconds, sr, array)
+        return synthetic_scene(seconds, sr, array, sources=scene)
     if source == "live":
         return capture_live(seconds, sr, array)
     # auto
@@ -239,4 +240,4 @@ def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
     except Exception:
         if name:
             return synthetic_voice(name, seconds, sr, array)
-        return synthetic_scene(seconds, sr, array)
+        return synthetic_scene(seconds, sr, array, sources=scene)

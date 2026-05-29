@@ -97,10 +97,11 @@ class Pipeline:
 
     # ----------------------------------------------------------------- listen
     def listen(self, duration: float = 1.0, source: str = "auto",
-               file: Optional[str] = None, return_audio: bool = False):
+               file: Optional[str] = None, return_audio: bool = False,
+               scene: Optional[list] = None):
         self.warmup()
         cap = capture(seconds=duration, sr=self.config.capture_rate,
-                      source=source, file=file, array=self.array)
+                      source=source, file=file, array=self.array, scene=scene)
         sources: List[SpatialSource] = self.stage1.process(cap)
 
         # --- Stage 2: parallel pass (this is the one we report results from)
