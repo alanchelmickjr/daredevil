@@ -31,11 +31,20 @@ class _State:
         if not live:
             self.pipe.enroll("alan", 3, source="synthetic")
         self.pipe.warmup()
+        self._last = None
+        self._busy = False
 
     def awareness(self) -> dict:
-        amap = self.pipe.listen(duration=1.0, source=self.source)
-        amap["wake_word"] = self.pipe.config.wake_word
-        return amap
+        if self._busy and self._last is not None:
+            return self._last
+        self._busy = True
+        try:
+            amap = self.pipe.listen(duration=1.0, source=self.source)
+            amap["wake_word"] = self.pipe.config.wake_word
+            self._last = amap
+            return amap
+        finally:
+            self._busy = False
 
 
 def _make_handler(state: _State):
@@ -44,12 +53,16 @@ def _make_handler(state: _State):
             pass
 
         def _send(self, code: int, body, ctype="application/json"):
-            data = body.encode() if isinstance(body, str) else body
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                data = body.encode() if isinstance(body, str) else body
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         def do_GET(self):
             u = urlparse(self.path)
@@ -59,8 +72,6 @@ def _make_handler(state: _State):
                 return self._send(200, json.dumps(state.awareness()))
             if u.path == "/probe":
                 sid = (parse_qs(u.query).get("id") or ["?"])[0]
-                # TODO: local STT (whisper.cpp) — transcribe this source on-device and
-                # hand the text to the LLM. Not implemented; respond honestly, never fake.
                 return self._send(200, json.dumps({
                     "id": sid, "implemented": False,
                     "todo": "local STT (whisper.cpp) not wired yet",
