@@ -4,6 +4,42 @@ First target: a one-command demo on a MacBook's built-in mics for a prospective
 angel investor / design partner — proving fast iteration off the patent. Then
 harden into the everywhere-SDK that also runs on the custom hardware.
 
+## North Star
+
+Daredevil is a **protection system**; the acoustic awareness map is how it keeps
+watch. Cameras and LIDAR are **line-of-sight** — they stop at the first wall.
+Sound bends around corners, passes through walls, and carries for miles, so ears
+reach what eyes can't: the toddler behind the couch, the hiker over the ridge.
+
+The mission spans a spectrum, and the same WHO / WHERE / WHAT primitives serve all
+of it:
+
+- **Everyday (most days):** recognize the known mailman and open the door for the
+  package; hear the pot boil over and cut the burner — concurrently, while the
+  household vacuums and reads to a child, and **without taxing the host GPU**, so it
+  can simply stay on.
+- **Safety-critical:** a child who stops breathing → trigger care + CPR; a wheel
+  about to fail → pull the car over; a child lost in a crowd → identify the voice +
+  bearing; a pipe break → catch it before the house floods.
+- **The absence:** the scariest signal is the room gone *wrong-quiet*. Detecting
+  silence-where-there-should-be-sound is a north-star capability, not an afterthought.
+
+Daredevil is the **perception layer and the trigger** — it notices in time and says
+*act now* to whatever can act — on-device, privately, for everyone in the room,
+including those the law won't let anyone else identify in the cloud.
+
+### Goals that follow
+
+- [ ] **Absence / cessation detection** — "wrong-quiet" as a first-class safety
+      event (breathing rhythm / expected-sound monitoring), not just present-sound classes.
+- [ ] **Beyond-line-of-sight localization** — bearing (and range) on sources you cannot see.
+- [ ] **Always-on, low-tax** — run continuously alongside the host's real work
+      without monopolizing CPU/GPU (parallel slots, int8/ONNX, the on-device module).
+- [ ] **Actuation-trigger contract** — a stable, trustworthy "act now" signal a
+      robot/agent can bet a life on.
+- [ ] **Reliability bar** — measured detection / false-alarm rates per safety class;
+      a protection system that silently fails is worse than none.
+
 ## Current status (v0.1.0)
 
 - [x] Package scaffold; **pure-Python core (zero required deps)**; pip-installable

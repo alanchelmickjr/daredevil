@@ -20,6 +20,7 @@ __all__ = [
     "IdentityModel",
     "TrackerParams",
     "SeparationParams",
+    "NMFParams",
     "SAFETY_CRITICAL_CLASSES",
     "is_safety_critical",
     "detect_backend",
@@ -188,6 +189,24 @@ class SeparationParams:
     distinct_cosine: float = 0.85  # streams more similar than this are the same source
 
 
+@dataclass
+class NMFParams:
+    """Spectral-basis tracking features ("name that tune in 3 notes").
+
+    The tracker associates contacts on frame-stable NMF activations rather than
+    ECAPA embeddings (which are unstable frame to frame). numpy learns the basis;
+    with no numpy the feature degrades to the normalised spectral envelope.
+    See docs/NMF_TRACKING_DESIGN.md.
+    """
+
+    enabled: bool = True
+    n_bins: int = 48              # frequency bands in the magnitude spectrum
+    n_components: int = 6         # learned spectral bases (k)
+    fit_after: int = 24           # observed frames before a global basis is learned
+    learn_iters: int = 150        # NMF iterations when learning the basis
+    decompose_iters: int = 50     # NMF iterations when decomposing a frame
+
+
 def default_data_dir() -> Path:
     """Where enrolled voiceprints live by default.
 
@@ -273,6 +292,7 @@ class Config:
     identity: IdentityModel = field(default_factory=IdentityModel)
     tracker: TrackerParams = field(default_factory=TrackerParams)
     separation: SeparationParams = field(default_factory=SeparationParams)
+    nmf: NMFParams = field(default_factory=NMFParams)
 
     # storage / fleet
     data_dir: Optional[str] = None     # None -> default_data_dir()

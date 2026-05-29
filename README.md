@@ -27,6 +27,33 @@ Today, an LLM listening to a room gets, at best, a raw transcript. It doesn't kn
 
 ---
 
+## Why this exists
+
+Cameras and LIDAR are **line-of-sight** — they stop at the first wall. Sound
+isn't: it bends around corners, travels through walls, and carries for miles. A
+camera can't see the toddler who wandered behind the couch, or the hiker lost over
+the ridge. **Ears can.** That's the bet — the sense that never needed light, or a
+clear view.
+
+Most days it isn't an emergency at all. It's the quiet concierge: recognizing the
+mailman's knock and opening the door for the package, catching the pot the moment
+it boils over and cutting the burner — **at the same time**, while you're
+vacuuming and reading to your kid — and doing it **without taxing the host's GPU**,
+so it can simply stay on.
+
+But it's built for the day it isn't ordinary. A child who stops breathing. A wheel
+about to come off at speed. A kid swept out of reach in a crowd. A pipe that would
+have flooded the house. Daredevil is the **perception layer and the trigger** —
+the part that notices in time and says *act now* to whatever can act (an agent, a
+robot, a phone alert). It exists to catch the moments that change a life —
+on-device, privately, for everyone in the room, including the ones the law won't
+let anyone else listen to.
+
+> The scariest signal is rarely a sound — it's an **absence**: the room gone
+> *wrong-quiet*. Detecting silence where there should be sound is the north star.
+
+---
+
 ## 60-second demo
 
 ```bash
