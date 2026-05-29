@@ -2,6 +2,8 @@
 
 Guidance for Claude Code (and humans) working in this repo. Read this first.
 
+> **Current state, CLI reference, and next steps:** see [`docs/HANDOFF.md`](docs/HANDOFF.md).
+
 ## What this is
 
 Daredevil is an open-source SDK that converts raw microphone audio into a
