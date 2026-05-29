@@ -69,7 +69,7 @@ class Pipeline:
 
         self.store = make_store(self.config)
         self.enrollment = EnrollmentManager(self.config, self.slots["embedding"], self.store)
-        self.tracker = UnknownTracker(self.config.thresholds.unknown_track)
+        self.tracker = UnknownTracker(params=self.config.tracker)
         self.router = AttentionRouter(self.config)
         if warmup:
             self.warmup()
@@ -113,21 +113,26 @@ class Pipeline:
         log.info(f"capture: {cap.source} {cap.duration:.1f}s rms={_rms_fn(cap.mono):.4f}")
         spatial_sources: List[SpatialSource] = self.stage1.process(cap)
 
-        # --- Stage 1.5: source separation
+        # --- Stage 1.5: source separation — only split when there really are
+        # multiple, distinct contacts. On a single talker, ConvTasNet manufactures
+        # a low-energy artifact stream; band-limiting through it would also corrupt
+        # the voiceprint, so we keep the clean wideband audio and let WHO run on it.
+        sep = self.config.separation
         sources: List[SpatialSource] = []
         for src in spatial_sources:
             if src.truth is not None:
                 sources.append(src)
+                continue
+            streams = self.separator.separate(src.audio, src.sr, min_energy=sep.min_energy)
+            active = self._active_streams(streams, sep)
+            log.info(f"separation: {len(streams)} stream(s) -> {len(active)} active contact(s)")
+            if len(active) <= 1:
+                sources.append(src)  # single contact: keep clean wideband audio
             else:
-                separated = self.separator.separate(src.audio, src.sr)
-                log.info(f"separation: {len(separated)} streams from 1 spatial source")
-                for i, stream in enumerate(separated):
-                    log.info(f"  stream {i}: energy={stream['energy']:.4f}")
+                for st in active:
                     sources.append(SpatialSource(
-                        audio=stream["audio"], sr=stream["sr"],
-                        azimuth=src.azimuth, elevation=src.elevation,
-                        truth=None,
-                    ))
+                        audio=st["audio"], sr=st["sr"],
+                        azimuth=src.azimuth, elevation=src.elevation, truth=None))
 
         # --- Stage 2: parallel pass (this is the one we report results from)
         t0 = time.perf_counter()
@@ -148,7 +153,13 @@ class Pipeline:
                 self._run_slot(s, src.audio, src.sr, ctx)
         sequential_ms = (time.perf_counter() - t1) * 1000
 
-        # --- assemble per-source records from the parallel results
+        # --- assemble per-source records from the parallel results.
+        # Every source is first associated to a persistent track (the contact);
+        # the SPRT classifier then accumulates identity evidence *per track* against
+        # the enrolled library. A track is named once its evidence crosses the Wald
+        # bound — until then it is the UNKNOWN-NNN contact. This is the stitch:
+        # WHERE (tracking) and WHO (identity) share one state per contact.
+        from .audio.utils import rms as _rms
         records = []
         for src, res in zip(sources, per_source):
             emb = res.get("embedding", {}).get("vector")
@@ -156,35 +167,30 @@ class Pipeline:
                 emb = self.slots["embedding"].run(src.audio, src.sr)["vector"]
             ev = res.get("events") or {"class": "unknown", "confidence": 0.0, "safety_critical": False}
             pr = res.get("prosody") or {"state": "calm", "distress": 0.0}
-
-            from .audio.utils import rms as _rms
             energy = _rms(src.audio)
 
             pos = None
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
-            single_source = (len(sources) == 1)
 
-            # Match with LLR accumulation — confidence builds across frames
-            match = self.enrollment.match(emb, energy=energy)
-            identity, unknown_id = None, None
+            track_id = self.tracker.assign(emb, position=pos, event_class=ev.get("class"))
+            match = self.enrollment.match(emb, energy=energy, key=track_id)
+
+            identity = None
             if self.enrollment.is_match(match):
                 identity = {"name": match["name"], "score": match["score"],
                             "enrollment_confidence": match["enrollment_confidence"]}
-                log.info(f"  → MATCHED {match['name']} score={match['score']:.3f}")
+                log.info(f"  {track_id} → MATCHED {match['name']} "
+                         f"raw={match['raw']:.3f} llr={match['llr']:.2f} score={match['score']:.3f}")
             else:
-                unknown_id = self.tracker.assign(
-                    emb, position=pos, event_class=ev.get("class"),
-                    single_source=single_source)
-                llr_state = self.enrollment._llr.get("alan", 0)
-                log.info(f"  → {unknown_id} event={ev.get('class')} energy={energy:.4f} llr_alan={llr_state:.3f}")
+                bl = match["llr"] if match else 0.0
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} best_llr={bl:.2f}")
 
-            position = None
-            if src.azimuth is not None:
-                position = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
+            records.append({"identity": identity, "unknown_id": track_id,
+                            "event": ev, "prosody": pr, "position": pos})
 
-            records.append({"identity": identity, "unknown_id": unknown_id,
-                            "event": ev, "prosody": pr, "position": position})
+        # Forget SPRT accumulators for contacts that have aged out.
+        self.enrollment.retain(self.tracker.live_ids())
 
         timing = {"parallel_ms": round(parallel_ms, 1),
                   "sequential_ms": round(sequential_ms, 1)}
@@ -199,3 +205,26 @@ class Pipeline:
     # ----------------------------------------------------------------- helper
     def _run_slot(self, slot, audio, sr, ctx):
         return slot.run(audio, sr, ctx)
+
+    def _active_streams(self, streams: list, sep) -> list:
+        """Keep only separated streams that are genuinely distinct, energetic contacts.
+
+        The loudest stream is the primary contact; a secondary stream is kept only
+        if it carries a meaningful fraction of the primary's energy AND is
+        spectrally distinct from it. Otherwise the secondary is a separation
+        artifact of a single source and is discarded.
+        """
+        if not streams:
+            return []
+        from .audio.utils import fingerprint, cosine
+        ordered = sorted(streams, key=lambda s: s["energy"], reverse=True)
+        primary = ordered[0]
+        pf = fingerprint(primary["audio"], primary["sr"])
+        active = [primary]
+        for st in ordered[1:]:
+            if st["energy"] < sep.dominance_ratio * primary["energy"]:
+                continue
+            if cosine(fingerprint(st["audio"], st["sr"]), pf) >= sep.distinct_cosine:
+                continue
+            active.append(st)
+        return active

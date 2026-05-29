@@ -3,10 +3,24 @@
 Enrollment confidence follows the patent's exponential saturation:
     C(t) = 1 - exp(-t / tau),  tau ~ 3s   ->  3s:0.63  10s:0.96  20s:0.999
 
-Matching uses log-likelihood ratio (LLR) accumulation — a Sequential Probability
-Ratio Test. Each frame's score is calibrated via adaptive score normalization
-(AS-Norm) against the enrolled cohort, then accumulated over time. Confidence
-rises frame by frame like name-that-tune: frame 1 is uncertain, frame 3-5 locks.
+Identity matching is a Sequential Probability Ratio Test (Wald) — the same
+detect-by-accumulating-evidence scheme passive sonar uses to call a contact.
+For the cosine similarity ``s`` between an observed embedding and an enrolled
+voiceprint, each frame contributes a log-likelihood ratio comparing:
+
+    H1 (this is speaker k):   s ~ N(target_mean, target_std)
+    H0 (background/impostor): s ~ N(impostor_mean, impostor_std)
+
+When two or more speakers are enrolled, the *others* form an adaptive cohort
+(AS-Norm) that estimates H0 directly; with a single enrolled speaker the
+configured background model stands in, so identity still works. The per-frame
+ratios accumulate **per track** (identity is a property of a tracked contact, not
+of one frame) until the running total crosses the upper Wald bound
+A = log((1-beta)/alpha) — declare the identity — or the lower bound
+B = log(beta/(1-alpha)) — reset, it isn't this speaker. The cumulative LLR is a
+log-odds, so confidence is sigmoid(LLR): a genuine posterior probability, not a
+hand-tuned curve. Weak (low-energy) frames are down-weighted; one very strong
+frame still matches outright.
 
 Only non-reversible embedding vectors are persisted — never raw audio.
 """
@@ -14,13 +28,22 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..audio.utils import cosine, rms
+
+_LOG_2PI = math.log(2.0 * math.pi)
 
 
 def enrollment_confidence(seconds: float, tau: float = 3.0) -> float:
     return 1.0 - math.exp(-max(0.0, seconds) / tau)
+
+
+def _log_gaussian(x: float, mu: float, sigma: float) -> float:
+    """Log of the Normal pdf N(mu, sigma) evaluated at x."""
+    sigma = max(sigma, 1e-6)
+    z = (x - mu) / sigma
+    return -0.5 * z * z - math.log(sigma) - 0.5 * _LOG_2PI
 
 
 class EnrollmentManager:
@@ -29,8 +52,12 @@ class EnrollmentManager:
         self.slot = embedding_slot
         self.store = store
         self.tau = config.thresholds.enroll_tau
-        # LLR accumulators per speaker — confidence builds across frames
-        self._llr: Dict[str, float] = {}
+        self.idm = config.identity
+        # Wald decision bounds derived from the configured error rates.
+        self._A = math.log((1.0 - self.idm.beta) / self.idm.alpha)   # accept identity
+        self._B = math.log(self.idm.beta / (1.0 - self.idm.alpha))   # reject identity
+        # Cumulative SPRT log-likelihood ratio (a log-odds) per (track, speaker).
+        self._llr: Dict[Tuple[str, str], float] = {}
 
     # --- enrollment -------------------------------------------------------
     def _mean_embedding(self, audio: List[float], sr: int, win: float = 1.0) -> List[float]:
@@ -73,88 +100,109 @@ class EnrollmentManager:
                 "seconds": seconds, "backend": self.slot.backend, "dim": len(vec),
                 "n_samples": n_samples}
 
-    # --- matching (SPRT with AS-Norm) -------------------------------------
-    def _score_calibrated(self, vector: Sequence[float], target_vec: Sequence[float],
-                          cohort_vecs: List[Sequence[float]]) -> float:
-        """AS-Norm: normalize raw cosine against the cohort distribution."""
-        raw = cosine(vector, target_vec)
-        if not cohort_vecs:
-            return raw
-        cohort_scores = [cosine(vector, c) for c in cohort_vecs]
-        mu = sum(cohort_scores) / len(cohort_scores)
-        var = sum((s - mu) ** 2 for s in cohort_scores) / len(cohort_scores)
-        std = math.sqrt(var) if var > 0 else 1.0
-        return (raw - mu) / std
+    # --- matching (Wald SPRT, accumulated per track) ----------------------
+    def _background_stats(self, vector: Sequence[float],
+                          others: List[Sequence[float]]) -> Tuple[float, float]:
+        """H0 parameters: an adaptive AS-Norm cohort if we have one, else the model.
 
-    def match(self, vector: Sequence[float], energy: float = 1.0) -> Optional[dict]:
-        """Score against all enrolled speakers using calibrated LLR accumulation.
+        With >=2 enrolled speakers the *other* voiceprints give the impostor score
+        distribution directly. With a single speaker there is no cohort, so the
+        configured background model is used — that is what lets one enrolled speaker
+        be matched at all.
+        """
+        if len(others) >= 2:
+            scores = [cosine(vector, o) for o in others]
+            mu = sum(scores) / len(scores)
+            var = sum((x - mu) ** 2 for x in scores) / len(scores)
+            sd = math.sqrt(var) if var > 1e-9 else self.idm.impostor_std
+            return mu, max(sd, 1e-3)
+        return self.idm.impostor_mean, self.idm.impostor_std
 
-        Each frame accumulates evidence. Confidence rises over time — like
-        name-that-tune. A strong single frame can still match immediately
-        (raw cosine > threshold), but weaker frames build up sequentially.
+    def _frame_quality(self, energy: float) -> float:
+        """Evidential weight in [0, 1]: silence carries none, loud-enough carries full."""
+        vad = self.config.thresholds.vad
+        full = self.idm.quality_full_energy
+        if energy <= vad:
+            return 0.0
+        if full <= vad:
+            return 1.0
+        return max(0.0, min(1.0, (energy - vad) / (full - vad)))
+
+    def match(self, vector: Sequence[float], energy: float = 1.0,
+              key: str = "default") -> Optional[dict]:
+        """Score against all enrolled speakers, accumulating an SPRT per (track, speaker).
+
+        ``key`` identifies the tracked contact this observation belongs to, so two
+        simultaneous sources don't pool their evidence. Returns the best candidate
+        (or None if nobody is enrolled); call ``is_match`` to apply the Wald bound.
         """
         records = self.store.all()
         if not records:
             return None
 
-        # Build cohort from all enrolled speakers (for AS-Norm)
-        cohort_vecs = [r["vector"] for r in records]
+        cohort = [r["vector"] for r in records]
+        quality = self._frame_quality(energy)
+        idm = self.idm
 
-        best_name, best_conf, best_enroll_conf = None, -999.0, 1.0
+        best = None
         for rec in records:
             name = rec["name"]
-            raw = cosine(vector, rec["vector"])
+            s = cosine(vector, rec["vector"])
+            others = [v for v in cohort if v is not rec["vector"]]
+            mu0, sd0 = self._background_stats(vector, others)
 
-            # If raw cosine is strong enough on its own, match immediately
-            if raw >= self.config.thresholds.match:
-                if raw > best_conf:
-                    best_conf = raw
-                    best_name = name
-                    best_enroll_conf = rec.get("enrollment_confidence", 1.0)
-                # Also boost the accumulator for future frames
-                self._llr[name] = self._llr.get(name, 0.0) + raw * 0.5
-                continue
+            # Per-frame log-likelihood ratio: log p(s|target) - log p(s|background).
+            frame_llr = (_log_gaussian(s, idm.target_mean, idm.target_std)
+                         - _log_gaussian(s, mu0, sd0))
 
-            # Calibrated score for weaker signals
-            others = [v for v in cohort_vecs if v is not rec["vector"]]
-            frame_score = self._score_calibrated(vector, rec["vector"], others)
+            kk = (key, name)
+            acc = (1.0 - idm.leak) * self._llr.get(kk, 0.0) + quality * frame_llr
+            if acc <= self._B:           # lower bound: definitively not this speaker -> reset
+                acc = 0.0
+            self._llr[kk] = acc
 
-            # Quality gate — weight by energy
-            quality = min(1.0, energy / 0.003) if energy > 0 else 0.1
-            weighted_score = frame_score * quality
+            posterior = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, acc))))
+            immediate = s >= idm.immediate_cosine          # one very clean frame is enough
+            decided = immediate or acc >= self._A
 
-            # LLR accumulation — slow decay, strong build (name-that-tune)
-            # Positive scores build fast, negative scores decay slow
-            prev = self._llr.get(name, 0.0)
-            if weighted_score > 0:
-                self._llr[name] = prev * 0.97 + weighted_score * 0.5
-            else:
-                self._llr[name] = prev * 0.97 + weighted_score * 0.1
-
-            # Confidence: sigmoid centered at 1.5 (need ~4-5 good frames to cross 0.70)
-            accumulated = self._llr[name]
-            confidence = 1.0 / (1.0 + math.exp(-(accumulated - 1.5)))
-
-            if confidence > best_conf:
-                best_conf = confidence
-                best_name = name
-                best_enroll_conf = rec.get("enrollment_confidence", 1.0)
-
-        if best_name is None:
-            return None
-        return {"name": best_name, "score": best_conf,
-                "enrollment_confidence": best_enroll_conf}
+            cand = {
+                "name": name, "raw": round(s, 4), "llr": acc,
+                "score": 1.0 if immediate else posterior,
+                "decided": decided,
+                "enrollment_confidence": rec.get("enrollment_confidence", 1.0),
+            }
+            if best is None or cand["llr"] > best["llr"]:
+                best = cand
+        return best
 
     def is_match(self, m: Optional[dict]) -> bool:
-        return bool(m and m["score"] >= self.config.thresholds.match)
+        return bool(m and (m.get("decided") or m.get("llr", 0.0) >= self._A))
+
+    # --- accumulator bookkeeping -----------------------------------------
+    def retain(self, live_keys: Iterable[str]) -> None:
+        """Drop SPRT accumulators for tracks that no longer exist."""
+        live = set(live_keys)
+        self._llr = {(k, n): v for (k, n), v in self._llr.items() if k in live}
+
+    def forget_track(self, key: str) -> None:
+        for kk in [kk for kk in self._llr if kk[0] == key]:
+            self._llr.pop(kk, None)
+
+    def top_llr(self) -> str:
+        """Compact readout of the strongest accumulator (for logging)."""
+        if not self._llr:
+            return "none"
+        (key, name), v = max(self._llr.items(), key=lambda kv: kv[1])
+        return f"{name}@{key}={v:.2f}"
 
     def names(self) -> List[str]:
         return [r["name"] for r in self.store.all()]
 
     def delete(self, name: str) -> None:
         self.store.delete(name)
-        self._llr.pop(name, None)
+        for kk in [kk for kk in self._llr if kk[1] == name]:
+            self._llr.pop(kk, None)
 
     def reset_accumulators(self) -> None:
-        """Reset all LLR accumulators (e.g. on scene change)."""
+        """Reset all SPRT accumulators (e.g. on scene change)."""
         self._llr.clear()

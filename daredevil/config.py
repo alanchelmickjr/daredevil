@@ -16,6 +16,9 @@ __all__ = [
     "Config",
     "PriorityWeights",
     "Thresholds",
+    "IdentityModel",
+    "TrackerParams",
+    "SeparationParams",
     "SAFETY_CRITICAL_CLASSES",
     "is_safety_critical",
     "detect_backend",
@@ -100,6 +103,78 @@ class Thresholds:
     surface: float = 0.45          # priority at/above which a source is routed to the LLM
 
 
+@dataclass
+class IdentityModel:
+    """Score models for the SPRT identity test — the sonar/radar detection paradigm.
+
+    Per-frame cosine similarity ``s`` between an observed embedding and an enrolled
+    voiceprint is modelled as Gaussian under each hypothesis:
+
+        H1 (target speaker):  s ~ N(target_mean, target_std)
+        H0 (background/impostor): s ~ N(impostor_mean, impostor_std)
+
+    The per-frame log-likelihood ratio is accumulated (Wald's Sequential
+    Probability Ratio Test) until it crosses an upper bound A = log((1-beta)/alpha)
+    — accept the identity — or a lower bound B = log(beta/(1-alpha)) — reject it.
+    Because the cumulative LLR is a log-odds, the reported confidence is simply
+    sigmoid(LLR): a real posterior, not a tuned curve. H0 is a *model*, so a single
+    enrolled speaker is matchable (no impostor cohort required). With two or more
+    enrolled speakers the others form an adaptive cohort (AS-Norm) for H0.
+
+    Defaults reflect published ECAPA-TDNN/VoxCeleb cosine statistics.
+    """
+
+    target_mean: float = 0.65      # mean same-speaker cosine
+    target_std: float = 0.12
+    impostor_mean: float = 0.18    # mean different-speaker cosine
+    impostor_std: float = 0.11
+    alpha: float = 0.01            # tolerable false-accept rate -> upper bound A
+    beta: float = 0.05             # tolerable miss rate -> lower bound B
+    leak: float = 0.0              # per-frame LLR leak for non-stationarity (0 = pure SPRT)
+    immediate_cosine: float = 0.80 # a single frame this strong matches outright
+    quality_full_energy: float = 0.02  # energy at which a frame carries full evidential weight
+
+
+@dataclass
+class TrackerParams:
+    """Multi-target track manager parameters (data association + track lifecycle).
+
+    Mirrors a passive-sonar tracker: detections are gated and associated to
+    existing tracks, tracks are confirmed by M-of-N logic, coast through misses,
+    and are deleted after sustained silence. Bearing (azimuth from DOA) is smoothed
+    with an alpha-beta filter.
+    """
+
+    assoc_cosine: float = 0.55     # min embedding cosine to associate a detection to a track
+    bearing_gate_deg: float = 25.0 # max azimuth gap to associate when both have bearing
+    bearing_assist: float = 0.15   # embedding slack permitted when bearing agrees
+    confirm_hits: int = 2          # M-of-N: hits to promote TENTATIVE -> CONFIRMED
+    confirm_window_s: float = 3.0  # window over which confirm_hits must accrue
+    coast_s: float = 5.0           # keep a missed track COASTING this long
+    delete_s: float = 15.0         # delete a track after this much silence
+    bearing_alpha: float = 0.5     # alpha-beta position-filter gains
+    bearing_beta: float = 0.1
+    recency_bonus: float = 0.10    # association tie-break bonus for very recent tracks
+    recency_window_s: float = 3.0
+    embedding_ema: float = 0.30    # how fast a track's stored voiceprint adapts
+
+
+@dataclass
+class SeparationParams:
+    """When to actually split a mixed stream into multiple contacts.
+
+    Separation only helps when there really are concurrent sources; on a single
+    talker it manufactures a low-energy artifact stream. We keep a separated stream
+    only if it is both energetic *and* spectrally distinct from the dominant one —
+    otherwise the source is treated as single and WHO runs on the clean wideband
+    audio rather than the band-limited separation output.
+    """
+
+    min_energy: float = 0.003      # below this RMS a separated stream is silence
+    dominance_ratio: float = 0.35  # a 2nd stream must reach this fraction of the primary's energy
+    distinct_cosine: float = 0.85  # streams more similar than this are the same source
+
+
 def default_data_dir() -> Path:
     """Where enrolled voiceprints live by default.
 
@@ -161,6 +236,9 @@ class Config:
     # tuning
     weights: PriorityWeights = field(default_factory=PriorityWeights)
     thresholds: Thresholds = field(default_factory=Thresholds)
+    identity: IdentityModel = field(default_factory=IdentityModel)
+    tracker: TrackerParams = field(default_factory=TrackerParams)
+    separation: SeparationParams = field(default_factory=SeparationParams)
 
     # storage / fleet
     data_dir: Optional[str] = None     # None -> default_data_dir()
