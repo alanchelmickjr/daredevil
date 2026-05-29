@@ -41,6 +41,39 @@ must run on any laptop with zero special hardware, and accelerate on device.
 7. **Be honest in the demo.** The synthetic scene is labeled SYNTHETIC. Simulated
    latencies are labeled `"simulated"`. Don't present fabricated numbers as live.
 
+## Scope fences
+
+Goals: **WHO-first, local, honest, open-source software.** Within that, these are
+load-bearing — a future session should treat them as hard boundaries.
+
+**Always**
+- Keep the core importable + runnable on the **stdlib alone**; every heavy backend
+  is optional, lazy, guarded, with a deterministic fallback.
+- Run the tests **and** the demo before pushing; if something is unverified, say so.
+- New tunables go in `config.py`; a new capability is a new `Slot`; keep the
+  awareness-map schema stable.
+
+**Never**
+- Never add a required/heavy dependency to the core.
+- Never add a code path that sends audio or embeddings off-device — no cloud, no
+  telemetry. `allow_cloud` stays `False`.
+- Never persist or transmit raw audio. Embeddings only, encrypted at rest.
+- Never commit hardware IP: BOM, part numbers, exact mic coordinates, schematics,
+  pin assignments, firmware. High-level "bridge statement" only.
+- Never put third-party personal names in committed files.
+- Never present synthetic/simulated numbers as live.
+- Never open a PR, or push to a branch other than the working branch, without an
+  explicit ask.
+
+**In scope (this repo)**
+- The open-source SDK: capture, spatial, the four slots, router, enrollment, the
+  Gun fleet layer, viz, demo, CLI, docs — and wiring real OSS models as optional
+  backends.
+
+**Out of scope (here)**
+- Hardware/firmware design artifacts and the module's array geometry — confidential,
+  they live elsewhere. Cloud services or accounts of any kind.
+
 ## The graceful-degradation pattern (used everywhere)
 
 ```python
