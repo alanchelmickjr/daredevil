@@ -114,6 +114,28 @@ def test_end_to_end_synthetic(tmp_path):
     assert amap["sources"][0]["id"] == baby["id"]
 
 
+def test_attention_gate_routes_subset(tmp_path):
+    """A struct is built for every source, but the radio is gated out of the LLM."""
+    from daredevil.stage1.mic_arrays import MACBOOK_3
+    from daredevil.stage3.router import llm_payload
+    pipe = Pipeline(config=Config(data_dir=str(tmp_path)), array=MACBOOK_3)
+    pipe.enroll("alan", mic_seconds=3, source="synthetic")
+    amap = pipe.listen(duration=1.0, source="synthetic")
+
+    classes = {s["event"]["class"] for s in amap["sources"]}
+    assert {"speech", "baby_cry", "music"} <= classes   # all detected -> all get structs
+
+    routed = amap["routed_to_llm"]
+    music = [s for s in amap["sources"] if s["event"]["class"] == "music"][0]
+    assert music["attention"] == "ambient"        # the radio is heard...
+    assert music["id"] not in routed              # ...but gated out of the conversation
+
+    baby = [s for s in amap["sources"] if s["event"]["class"] == "baby_cry"][0]
+    assert baby["id"] in routed                   # safety-critical surfaces
+    assert "alan" in routed                       # the enrolled owner speaking surfaces
+    assert {s["id"] for s in llm_payload(amap)} == set(routed)
+
+
 class _Arr:
     name = "test"
     n_mics = 3
