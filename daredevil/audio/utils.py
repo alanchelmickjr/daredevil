@@ -1,0 +1,170 @@
+"""Pure-stdlib DSP helpers.
+
+These are intentionally dependency-free so the core pipeline runs anywhere. When
+numpy is available we use it (faster); otherwise we fall back to plain Python.
+None of this is meant to beat librosa — it's the floor that guarantees the
+awareness map is always computable.
+"""
+from __future__ import annotations
+
+import math
+from typing import List, Optional, Sequence
+
+try:  # optional acceleration
+    import numpy as _np
+except Exception:  # pragma: no cover - numpy is optional
+    _np = None
+
+
+def have_numpy() -> bool:
+    return _np is not None
+
+
+def to_mono(channels: Sequence[Sequence[float]]) -> List[float]:
+    """Average a list of channels into a mono signal."""
+    if not channels:
+        return []
+    if len(channels) == 1:
+        return list(channels[0])
+    n = min(len(c) for c in channels)
+    if _np is not None:
+        arr = _np.array([c[:n] for c in channels], dtype=float)
+        return arr.mean(axis=0).tolist()
+    out = [0.0] * n
+    k = len(channels)
+    for c in channels:
+        for i in range(n):
+            out[i] += c[i]
+    return [v / k for v in out]
+
+
+def rms(signal: Sequence[float]) -> float:
+    if not signal:
+        return 0.0
+    if _np is not None:
+        a = _np.asarray(signal, dtype=float)
+        return float(_np.sqrt(_np.mean(a * a)))
+    return math.sqrt(sum(v * v for v in signal) / len(signal))
+
+
+def zero_crossing_rate(signal: Sequence[float]) -> float:
+    if len(signal) < 2:
+        return 0.0
+    crossings = 0
+    prev = signal[0]
+    for v in signal[1:]:
+        if (v >= 0) != (prev >= 0):
+            crossings += 1
+        prev = v
+    return crossings / (len(signal) - 1)
+
+
+def resample(signal: Sequence[float], sr_in: int, sr_out: int) -> List[float]:
+    """Linear-interpolation resample. Good enough to feed 16k models from 44.1/48k."""
+    if sr_in == sr_out or not signal:
+        return list(signal)
+    ratio = sr_out / sr_in
+    n_out = max(1, int(round(len(signal) * ratio)))
+    if _np is not None:
+        x_old = _np.linspace(0.0, 1.0, num=len(signal), endpoint=False)
+        x_new = _np.linspace(0.0, 1.0, num=n_out, endpoint=False)
+        return _np.interp(x_new, x_old, _np.asarray(signal, dtype=float)).tolist()
+    out = []
+    last = len(signal) - 1
+    for i in range(n_out):
+        pos = i / ratio
+        lo = int(math.floor(pos))
+        hi = min(lo + 1, last)
+        frac = pos - lo
+        out.append(signal[lo] * (1 - frac) + signal[hi] * frac)
+    return out
+
+
+def is_speech(signal: Sequence[float], threshold: float) -> bool:
+    """Trivial energy-gate VAD. Real backends can swap in Silero VAD (MIT)."""
+    return rms(signal) >= threshold
+
+
+def spectral_centroid(signal: Sequence[float], sr: int) -> float:
+    """Rough spectral centroid (Hz) via a small DFT. Used by heuristic slots."""
+    mags, freqs = _dft_mag(signal, sr, n_bins=64)
+    total = sum(mags)
+    if total <= 0:
+        return 0.0
+    return sum(f * m for f, m in zip(freqs, mags)) / total
+
+
+def fingerprint(signal: Sequence[float], sr: int, dim: int = 192) -> List[float]:
+    """A cheap, deterministic spectral fingerprint, L2-normalised to `dim`.
+
+    This is the *fallback* speaker embedding: it is NOT ECAPA and makes no claim
+    to discriminate real voices. Its only job is to let the enroll -> identify
+    demo behave sensibly with zero dependencies, by being stable for the same
+    input and different across different sources. On a real install, the ECAPA
+    backend replaces this entirely.
+    """
+    mags, _ = _dft_mag(signal, sr, n_bins=dim)
+    norm = math.sqrt(sum(m * m for m in mags))
+    if norm <= 0:
+        return [0.0] * dim
+    return [m / norm for m in mags]
+
+
+def cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    """Cosine similarity in [-1, 1] (patent Eq. 1)."""
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    if _np is not None:
+        av = _np.asarray(a[:n], dtype=float)
+        bv = _np.asarray(b[:n], dtype=float)
+        da = float(_np.linalg.norm(av))
+        db = float(_np.linalg.norm(bv))
+        if da == 0 or db == 0:
+            return 0.0
+        return float(av.dot(bv) / (da * db))
+    dot = sum(a[i] * b[i] for i in range(n))
+    da = math.sqrt(sum(a[i] * a[i] for i in range(n)))
+    db = math.sqrt(sum(b[i] * b[i] for i in range(n)))
+    if da == 0 or db == 0:
+        return 0.0
+    return dot / (da * db)
+
+
+# --- internal -------------------------------------------------------------
+
+def _decimate(signal: Sequence[float], target: int = 1024) -> List[float]:
+    if len(signal) <= target:
+        return list(signal)
+    step = len(signal) / target
+    return [signal[int(i * step)] for i in range(target)]
+
+
+def _dft_mag(signal: Sequence[float], sr: int, n_bins: int):
+    """Magnitude spectrum at `n_bins` log-spaced frequencies (~60Hz .. sr/2)."""
+    x = _decimate(signal, 1024)
+    n = len(x)
+    if n == 0:
+        return [0.0] * n_bins, [0.0] * n_bins
+    f_lo, f_hi = 60.0, max(120.0, sr / 2.0)
+    freqs = [f_lo * (f_hi / f_lo) ** (k / max(1, n_bins - 1)) for k in range(n_bins)]
+    if _np is not None:
+        xa = _np.asarray(x, dtype=float)
+        idx = _np.arange(n)
+        mags = []
+        for f in freqs:
+            ang = -2.0 * math.pi * f * idx / sr
+            re = float(_np.dot(xa, _np.cos(ang)))
+            im = float(_np.dot(xa, _np.sin(ang)))
+            mags.append(math.hypot(re, im))
+        return mags, freqs
+    mags = []
+    for f in freqs:
+        w = -2.0 * math.pi * f / sr
+        re = im = 0.0
+        for i in range(n):
+            ang = w * i
+            re += x[i] * math.cos(ang)
+            im += x[i] * math.sin(ang)
+        mags.append(math.hypot(re, im))
+    return mags, freqs
