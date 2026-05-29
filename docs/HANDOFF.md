@@ -94,15 +94,35 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ---
 
+## Recently fixed (WHO matching + tracking stitch)
+
+- **Wald SPRT identity classifier** — `enrollment/manager.py` now accumulates a true
+  per-frame log-likelihood ratio `logN(s;target) − logN(s;background)` and decides at
+  the Wald bound `A = log((1−β)/α)`; confidence is `sigmoid(LLR)` (a real posterior).
+  Works with a single enrolled speaker (configured background model; an adaptive
+  AS-Norm cohort kicks in at ≥2 speakers). Fixes the old false-UNKNOWN cliff where a
+  real speaker below cosine 0.70 was read as unknown (repro: 0/20 → 20/20 at cos 0.55).
+- **Identity is per-track** — evidence accumulates per `(track, speaker)`, so two
+  simultaneous contacts no longer pool their identity evidence. WHERE (tracking) and
+  WHO (identity) now share one state per contact.
+- **Multi-target track manager** — `stage3/tracker.py`: gate → associate (embedding +
+  bearing) → M-of-N confirm → coast → delete, with an α-β bearing filter. Replaces the
+  recency-only mono hack.
+- **Separation gating** — `pipeline.py` only splits a stream when there are genuinely
+  ≥2 energetic, distinct contacts; a single talker keeps its clean wideband audio so
+  the 8 kHz separation residual no longer corrupts the ECAPA voiceprint.
+- All tunables live in `config.py` (`IdentityModel`, `TrackerParams`, `SeparationParams`)
+  — no magic literals in the logic. 17 tests pass on stdlib alone.
+
 ## Known issues / next work (prioritized)
 
 1. **Feed-forward attention filter** — The gate should feed state back to the beginning of the next loop. Ambient sources get lightweight checks instead of full processing. Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
 
-2. **Multi-source discrimination on mono** — With separation producing 2 streams, the tracker needs to tell them apart. Current: single-source recency-first (everything is one ID). Need: Hungarian matching on embeddings when separation yields distinct streams.
+2. **Calibrate the SPRT score models on real ECAPA** — `IdentityModel` defaults
+   (`target_mean=0.65`, `impostor_mean=0.18`, …) are from published VoxCeleb stats;
+   measure your own enrolled cohort and tune them (and `alpha`/`beta`) to the live mic.
 
-3. **Enrollment at natural conditions** — Re-enroll at normal sitting distance/volume so the SPRT can accumulate identity. The matching pipeline (SPRT + AS-Norm) is ready, just needs a voiceprint that represents natural speech.
-
-4. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
+3. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
 
 5. **Live wake word** — openWakeWord ("Hey Radar") to steer focus.
 

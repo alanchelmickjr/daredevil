@@ -1,10 +1,14 @@
-"""Unknown-source tracking — persistent UNKNOWN-NNN identifiers (patent Claim 6).
+"""Multi-target track manager — persistent UNKNOWN-NNN contacts (patent Claim 6).
 
-Uses a slot-based assignment inspired by SORT (Simple Online Realtime Tracking):
-each frame's detections are assigned to existing tracks via best-match, with a
-low threshold for continuation (the same source sounds different frame to frame).
-Tracks have states: ACTIVE → DORMANT → removed. A source keeps its ID across
-silence gaps by staying DORMANT until heard again or timed out.
+Modeled on a passive-sonar tracker rather than ad-hoc recency. Each frame's
+detection is gated and associated to an existing track by embedding similarity
+(and bearing, when a DOA azimuth is available); an unmatched detection starts a
+new tentative track. Tracks are confirmed by M-of-N hit logic, coast through
+misses, and are deleted after sustained silence. Bearing (azimuth) is smoothed
+with an alpha-beta filter so a contact's direction is stable frame to frame.
+
+All time constants and gates live in ``TrackerParams`` (config) — none are baked
+into the logic here.
 """
 from __future__ import annotations
 
@@ -12,81 +16,112 @@ import time
 from typing import List, Optional, Sequence
 
 from ..audio.utils import cosine
+from ..config import TrackerParams
+
+TENTATIVE, CONFIRMED, COASTING = "tentative", "confirmed", "coasting"
+
+
+def _bearing_gap(a: float, b: float) -> float:
+    """Smallest absolute angular distance between two bearings, in degrees."""
+    d = abs((a - b) % 360.0)
+    return min(d, 360.0 - d)
 
 
 class UnknownTracker:
-    def __init__(self, threshold: float = 0.65):
-        self.threshold = threshold
+    def __init__(self, threshold: Optional[float] = None,
+                 params: Optional[TrackerParams] = None):
+        self.p = params or TrackerParams()
+        # `threshold` (if given) overrides the association gate — kept for the
+        # historical constructor signature.
+        self.threshold = self.p.assoc_cosine if threshold is None else threshold
         self._tracks: List[dict] = []
         self._counter = 0
-        self._max_dormant = 15.0  # seconds before a dormant track is removed
 
+    # ------------------------------------------------------------- assign
     def assign(self, vector: Sequence[float], position: Optional[dict] = None,
                event_class: Optional[str] = None, single_source: bool = False) -> str:
-        """Assign a detection to an existing track or create a new one.
-
-        Strategy: find the most recent active track. For mono/single-source,
-        the most recently active track gets priority — this handles the
-        "same physical source, different embeddings" case by trusting recency.
-        For multi-source, use cosine to discriminate.
-        """
+        """Associate a detection to a track (or open a new one); return the track id."""
         now = time.monotonic()
         self._prune(now)
+        az = position.get("azimuth") if position else None
 
-        if not self._tracks:
-            return self._new_track(vector, now, event_class, position)
-
-        if single_source:
-            # Mono mic: only one physical source at a time. The most recent
-            # active track IS this source unless it's been dormant too long.
-            active = [t for t in self._tracks if now - t["last_seen"] < 5.0]
-            if active:
-                best = max(active, key=lambda t: t["last_seen"])
-                best["last_seen"] = now
-                best["event_class"] = event_class
-                best["hits"] += 1
-                return best["id"]
-            # Nothing recent — new source
-            return self._new_track(vector, now, event_class, position)
-
-        # Multi-source: use cosine + recency to find best match
-        best, best_score = None, -1.0
+        cand, best = None, -1e9
         for t in self._tracks:
-            age = now - t["last_seen"]
-            if age > self._max_dormant:
+            raw = cosine(vector, t["vector"])
+            gap = None
+            if az is not None and t.get("azimuth") is not None:
+                gap = _bearing_gap(az, t["azimuth"])
+                if gap > self.p.bearing_gate_deg:
+                    continue  # outside the bearing gate — cannot be the same contact
+            # Embedding gate, relaxed slightly when bearing corroborates.
+            gate = self.threshold - (self.p.bearing_assist if gap is not None else 0.0)
+            if raw < gate:
                 continue
-            score = cosine(vector, t["vector"])
-            if age < 3.0:
-                score += 0.10
+            score = raw
+            if gap is not None:
+                score += (1.0 - gap / self.p.bearing_gate_deg) * 0.1
+            if now - t["last_seen"] < self.p.recency_window_s:
+                score += self.p.recency_bonus
             if event_class and t.get("event_class") == event_class:
-                score += 0.10
-            if score > best_score:
-                best_score, best = score, t
+                score += 0.05
+            if score > best:
+                best, cand = score, t
 
-        if best is not None and best_score >= self.threshold:
-            best["vector"] = list(vector)
-            best["last_seen"] = now
-            best["event_class"] = event_class
-            best["hits"] += 1
-            return best["id"]
+        if cand is not None:
+            self._update(cand, vector, az, event_class, now)
+            return cand["id"]
+        return self._new(vector, az, event_class, position, now)
 
-        return self._new_track(vector, now, event_class, position)
+    # ------------------------------------------------------------- internals
+    def _update(self, t: dict, vector, az, event_class, now) -> None:
+        e = self.p.embedding_ema
+        m = min(len(t["vector"]), len(vector))
+        t["vector"] = [(1.0 - e) * t["vector"][i] + e * vector[i] for i in range(m)]
+        if az is not None:
+            if t.get("azimuth") is None:
+                t["azimuth"], t["az_rate"] = az, 0.0
+            else:
+                # alpha-beta filter on the shortest signed bearing residual
+                resid = ((az - t["azimuth"] + 180.0) % 360.0) - 180.0
+                t["azimuth"] = (t["azimuth"] + self.p.bearing_alpha * resid) % 360.0
+                t["az_rate"] = t["az_rate"] + self.p.bearing_beta * resid
+        t["event_class"] = event_class
+        t["hits"] += 1
+        t["last_seen"] = now
+        if t["hits"] >= self.p.confirm_hits and (now - t["born"]) <= self.p.confirm_window_s:
+            t["status"] = CONFIRMED
+        elif t["status"] == COASTING:
+            t["status"] = CONFIRMED if t["hits"] >= self.p.confirm_hits else TENTATIVE
 
-    def _new_track(self, vector, now, event_class, position) -> str:
+    def _new(self, vector, az, event_class, position, now) -> str:
         self._counter += 1
         sid = f"UNKNOWN-{self._counter:03d}"
         self._tracks.append({
             "id": sid, "vector": list(vector), "hits": 1,
-            "last_seen": now, "event_class": event_class, "position": position,
+            "born": now, "last_seen": now, "status": TENTATIVE,
+            "event_class": event_class, "azimuth": az, "az_rate": 0.0,
+            "position": position,
         })
         return sid
 
     def _prune(self, now: float) -> None:
-        self._tracks = [t for t in self._tracks if now - t["last_seen"] < self._max_dormant]
+        for t in self._tracks:
+            if t["status"] != COASTING and (now - t["last_seen"]) > self.p.coast_s:
+                t["status"] = COASTING
+        self._tracks = [t for t in self._tracks if (now - t["last_seen"]) <= self.p.delete_s]
 
-    def prune(self, max_age: float = 30.0) -> None:
-        now = time.monotonic()
-        self._tracks = [t for t in self._tracks if now - t.get("last_seen", now) < max_age]
+    def prune(self, max_age: Optional[float] = None) -> None:
+        self._prune(time.monotonic())
+
+    # ------------------------------------------------------------- queries
+    def live_ids(self) -> List[str]:
+        return [t["id"] for t in self._tracks]
+
+    def status_of(self, sid: str) -> Optional[str]:
+        for t in self._tracks:
+            if t["id"] == sid:
+                return t["status"]
+        return None
 
     @property
     def _sources(self):
