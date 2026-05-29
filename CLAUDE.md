@@ -15,6 +15,24 @@ map (a JSON dict) *is* the product.
 Thesis: *"To be scalable, it has to run where the AI agents are."* So the SDK
 must run on any laptop with zero special hardware, and accelerate on device.
 
+## Why it matters (the stakes)
+
+Daredevil is a **protection system** — the sensing is just how it keeps watch.
+Ears reach where cameras and LIDAR can't (sound isn't line-of-sight: it goes
+through walls, around corners, for miles). Most days that's the quiet stuff — the
+known mailman at the door, the pot boiling over — handled concurrently while the
+household goes on, without taxing the host. But it's built for the day it isn't
+ordinary: a child who stops breathing, a wheel about to come off, a kid lost in a
+crowd, a flood caught before it ruins a home. Daredevil is the perception layer
+and the *trigger* that says "act now" to whatever can act. Two consequences for how
+we build:
+
+1. **A protection system that silently fails is worse than none** — it sells false
+   safety. This is *why* the "no fakes / measured-not-invented" rules are
+   non-negotiable: on the day it has to find your kid, it has to actually work.
+2. **The scariest signal is an absence** (the room gone *wrong-quiet*), not a
+   sound. Detecting silence-where-there-should-be-sound is a first-class goal.
+
 ## Non-negotiable rules
 
 1. **The core stays pure-Python (stdlib only).** `pip install daredevil` with no
