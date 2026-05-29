@@ -1,6 +1,6 @@
 # Daredevil — Handoff & CLI Reference
 
-**As of commit `5711eb4` · branch `claude/fervent-faraday-rx9Ns` · 2026-05-29**
+**As of commit `db1d8f0` · branch `main` · 2026-05-29**
 
 Read `CLAUDE.md` first (goals + guardrails). This doc is the point-in-time
 snapshot: how to run everything, what's real vs. stubbed, and what's next.
@@ -10,19 +10,20 @@ snapshot: how to run everything, what's real vs. stubbed, and what's next.
 ## Pull & build
 
 ```bash
-git fetch origin
-git checkout claude/fervent-faraday-rx9Ns
-git pull
+git clone https://github.com/alanchelmickjr/daredevil
+cd daredevil
 
-pip install -e .            # core: pure-Python, zero heavy deps — runs immediately
-# optional accelerators (install what you want; slots auto-upgrade fallback -> real):
-pip install -e ".[speaker]" #  WHO   — SpeechBrain ECAPA (downloads ~weights on first run)
-pip install -e ".[events]"  #  WHAT  — PANNs CNN14
-pip install -e ".[prosody]" #  HOW   — librosa
-pip install -e ".[spatial]" #  WHERE — pyroomacoustics (+ numpy/scipy)
-pip install -e ".[audio]"   #  live mic (sounddevice)
-pip install -e ".[viz]"     #  matplotlib radar/spectrogram PNGs
-pip install -e ".[full]"    #  everything
+# Option A: conda (recommended — all heavy backends + MPS acceleration)
+brew install miniforge
+conda env create -f environment.yml
+conda activate daredevil
+pip install -e .
+
+# Option B: pip with extras
+pip install -e ".[full]"
+
+# Option C: core only (pure-Python, zero deps — still runs the full pipeline)
+pip install -e .
 ```
 
 The core has **no required dependencies** — `python -m daredevil.demo` works on a
@@ -33,100 +34,113 @@ only *accelerate* the same pipeline.
 
 ## CLI reference
 
-Two entry points: the installed `daredevil` script and `python -m daredevil`.
-
 | Command | What it does |
 |---|---|
-| `daredevil demo` | End-to-end demo on the synthetic scene (enroll → listen → awareness map → radar). |
-| `daredevil demo --live` | Same, but uses the real microphone (needs `[audio]`). |
-| `daredevil demo --file scene.wav` | Run against a recorded multi-source WAV. |
-| `daredevil demo --spectrogram out.png` | Also render the spectrogram + overlay PNG (needs `[viz]`). |
-| `daredevil demo --save-png radar.png` | Also render the polar radar PNG. |
+| `daredevil demo` | End-to-end demo on the synthetic scene. |
+| `daredevil demo --live` | Same, but uses the real microphone. |
+| `daredevil demo --file scene.wav` | Run against a recorded WAV. |
 | `daredevil demo --json` | Print only `{enrollment, awareness_map}` JSON. |
 | `daredevil serve [--port 8770] [--live]` | Launch the **web HUD** at `http://127.0.0.1:8770`. |
-| `daredevil bench [--iters 10]` | Crowd-scaling benchmark: pipeline latency vs. source count; shows → LLM stays flat. |
-| `daredevil enroll --name NAME [-s 3] [--live]` | Enroll a speaker; prints the `C(t)=1-e^(-t/3)` confidence. |
-| `daredevil listen [--duration 1.0] [--live] [--file W] [--json]` | Emit one awareness map (radar or JSON). |
-| `daredevil devices` | Detected mic array + which backends are installed. |
-| `daredevil version` | Version. |
-| `python -m daredevil.enroll --name alan --seconds 3` | Standalone enrollment entry point. |
+| `daredevil mcp` | Run as MCP server (stdio) for Claude / LLM agents. |
+| `daredevil bench [--iters 10]` | Crowd-scaling benchmark. |
+| `daredevil enroll --name NAME [-s 3] [--live]` | Enroll a speaker. |
+| `daredevil listen [--duration 1.0] [--live] [--json]` | Emit one awareness map. |
+| `daredevil devices` | Detected array + installed backends. |
 
-**Quick demo for someone new:**
+**Quick demo:**
 ```bash
-python -m daredevil.demo      # see the awareness map + radar (synthetic, labeled)
-python -m daredevil serve     # open http://127.0.0.1:8770  — the orbital HUD
-python -m daredevil bench     # the "flat in a crowd" proof
+python -m daredevil.demo          # synthetic scene — works anywhere
+python -m daredevil serve --live  # live HUD with real mic + ML backends
 ```
 
 ---
 
-## What's real vs. stubbed (be honest in the demo)
+## What's real (verified working on MacBook Air M2, 2026-05-28)
 
-**Verified working (pure-Python, tested here):**
-- Three-stage pipeline; parallel slot execution + timing.
-- WHO: 3s enrollment, cosine match, clip-length-invariant fallback fingerprint.
-- Attention gate: `attention: surface|ambient` + `routed_to_llm`; the radio is gated out.
-- Stage-3 priority (patent Eq. 2) + `SAFETY_CRITICAL` / `DISTRESS` overrides; `UNKNOWN-NNN` tracking.
-- Structured JSON awareness map; ASCII radar; matplotlib HUD + spectrogram.
-- Local-first identity store + Gun fleet scaffold (encrypted-at-rest hook).
-- Web HUD + `serve` (verified end-to-end), `bench`, `9` tests passing.
-
-**Stubbed / not yet validated (next work):**
-- Real ML backends (ECAPA / PANNs / librosa): integration code is written but **not run**
-  here (no torch / can't download weights). They auto-upgrade `fallback → reference`
-  when the extra is installed; first real run is unverified.
-- STT (`/probe` in the HUD): placeholder text — local whisper.cpp to wire in.
-- LLM loop (Gemma via Ollama): not wired yet.
-- Wake word: `config.wake_word` + HUD chip only; openWakeWord not yet listening.
-- Live multi-mic SRP-PHAT: code present, not validated on a real array.
-
-**Known perf note:** the → LLM payload stays **flat** as sources grow (the gate), but the
-pure-Python perception front-end climbs (~48 ms @ 2 sources → ~480 ms @ 20) and crosses
-200 ms around ~10 simultaneous sources. Fix = cheap pre-gate + per-source parallelism +
-ONNX int8. See `docs/PERFORMANCE.md`.
+- **ECAPA-TDNN speaker embedding** — SpeechBrain, 192-dim, running on MPS (Apple Metal GPU). Proper audio normalization + embedding normalization per SpeechBrain docs. Match score 0.78+ on same-speaker.
+- **PANNs CNN14 event classification** — 527 AudioSet classes, 32kHz resampling, running on CPU. Correctly identifies Speech, Music, Whistling, Vehicle, Animal, etc.
+- **librosa prosody** — pYIN F0 extraction + distress heuristic.
+- **ConvTasNet source separation** — Asteroid, pretrained on WHAM!, splits mono into 2 source streams before the slots analyze each independently. ~160ms per frame.
+- **SPRT identity matching** — Log-likelihood ratio accumulation across frames (Sequential Probability Ratio Test). Identity confidence builds over time like name-that-tune. AS-Norm calibration against enrolled cohort.
+- **Multi-sample enrollment** — Welford online mean update. Voiceprint sharpens with each re-enrollment.
+- **Tracker** — Slot-based assignment. Single-mic: recency-first (most recent track = current source). Multi-source: cosine + recency. Tracks go ACTIVE → DORMANT (15s) → removed.
+- **Web HUD** — Neumorphic-steampunk orbital display. Known speakers on left column (3x linger), unknown active on radar, stale fading to right column (capacity-based eviction). Crash-resistant (handles refresh mid-inference).
+- **MCP server** — 4 tools (listen, awareness, enroll_speaker, devices). Stdio transport. Configured for Claude Code in `.claude/settings.local.json`.
+- **Pipeline logging** — Capture RMS, separation streams, tracker decisions, LLR state. Logs to stdout (redirect to file with `> /tmp/daredevil.log 2>&1`).
+- **Full test suite** — 9 tests passing with all real backends loaded.
+- **Privacy** — No cloud, no raw audio stored, non-reversible embeddings only. COPPA compliant.
 
 ---
 
-## Expected output after pulling (sanity check)
+## Backends detected
 
+With conda env `daredevil` active:
 ```
-python -m pytest -q          # 9 passed
-python -m daredevil bench    # sources 2/5/10/20 -> pipeline_ms rises, "→ LLM" stays 2
-python -m daredevil.demo     # awareness map with alan (enrolled), UNKNOWN baby (SAFETY), radio (ambient/gated)
+backend: mps (Apple Metal GPU)
+slots: embedding=reference (ECAPA), events=reference (PANNs), prosody=reference (librosa)
+separator: reference (ConvTasNet)
 ```
 
 ---
 
-## Next tasks (prioritized)
+## Architecture (current)
 
-1. **Wire ECAPA live** — `pip install -e ".[speaker]"`, run `daredevil demo --live`, confirm
-   it identifies a real enrolled voice (replaces the fallback fingerprint). Headline capability.
-2. **Gemma loop** — surfaced sources (`llm_payload(amap)`) → local Gemma (Ollama, E2B/E4B) →
-   streamed reply; target < 3 s to first token. Keep it local.
-3. **Front-end speed** — per-source parallelism + ONNX-Runtime int8 (CoreML on Mac) to hold
-   < 200 ms even in a crowd.
-4. **Live wake word** — openWakeWord ("Hey Radar") to grab/steer focus; click → whisper STT in the HUD.
-5. **Live spatial** — validate SRP-PHAT on a real multi-mic array.
+```
+capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tracker → router/gate → awareness map
+                                                    ├─ WHO (ECAPA)                                  ↓
+                                                    ├─ WHAT (PANNs)                          → LLM payload
+                                                    └─ HOW (librosa)                         (only surfaced sources)
+```
 
 ---
 
-## Map of the code
+## Known issues / next work (prioritized)
+
+1. **Feed-forward attention filter** — The gate should feed state back to the beginning of the next loop. Ambient sources get lightweight checks instead of full processing. Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
+
+2. **Multi-source discrimination on mono** — With separation producing 2 streams, the tracker needs to tell them apart. Current: single-source recency-first (everything is one ID). Need: Hungarian matching on embeddings when separation yields distinct streams.
+
+3. **Enrollment at natural conditions** — Re-enroll at normal sitting distance/volume so the SPRT can accumulate identity. The matching pipeline (SPRT + AS-Norm) is ready, just needs a voiceprint that represents natural speech.
+
+4. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
+
+5. **Live wake word** — openWakeWord ("Hey Radar") to steer focus.
+
+6. **ONNX Runtime** — Replace PyTorch inference with ONNX + CoreML EP for production speed.
+
+---
+
+## Design docs
+
+- [`docs/ATTENTION_GATE_DESIGN.md`](ATTENTION_GATE_DESIGN.md) — Feed-forward filter: gate output steers next frame's processing budget
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — Full system architecture
+- [`docs/MODELS.md`](MODELS.md) — Model selection, licensing, engine plan
+- [`docs/ROADMAP.md`](ROADMAP.md) — Feature roadmap
+- [`docs/PRIVACY.md`](PRIVACY.md) — Privacy guarantees
+- [`docs/PERFORMANCE.md`](PERFORMANCE.md) — Latency analysis
+
+---
+
+## Environment
 
 ```
-daredevil/
-  config.py        thresholds/weights (patent Eq.2), safety classes, wake_word, backend detect
-  pipeline.py      Stage1 -> parallel Stage2 -> Stage3; listen()/enroll(); timing; scene= for crowds
-  audio/           capture.py (live/file/synthetic + crowds), utils.py (stdlib DSP, fingerprint)
-  stage1/          mic_arrays.py (geometries + coordinate-map loader), spatial.py (SRP-PHAT)
-  stage2/          base.py (Slot), embedding.py (WHO), events.py (WHAT), prosody.py (HOW)
-  stage3/          tracker.py (UNKNOWN-NNN), router.py (priority + gate + llm_payload)
-  enrollment/      manager.py (enroll/match; C(t)=1-exp(-t/tau))
-  fleet/           store.py (Local/Gun), crypto.py (Fernet at-rest), gun-relay/ (Node peer)
-  viz/             spatial_map.py (ascii/radar/spectrogram), server.py + web/index.html (HUD)
-  demo.py cli.py enroll.py __main__.py
-docs/              ARCHITECTURE · MODELS · ROADMAP · PRIVACY · PERFORMANCE · BUILD_SPEC · HANDOFF
-tests/             test_core.py (stdlib-only)
+conda env: daredevil (Python 3.11, miniforge)
+torch: 2.12.0 (MPS)
+speechbrain: 1.1.0
+asteroid: 0.7.0
+librosa: 0.11.0
+panns-inference: 0.1.1
+mcp: 1.27.1
+Platform: macOS Darwin 24.6.0, Apple Silicon
 ```
 
-Guardrails (full list in `CLAUDE.md`): stdlib-only core, no cloud ever, persist only
-non-reversible embeddings, no hardware IP in the repo, no third-party names, honest demos.
+---
+
+## Expected output (sanity check)
+
+```
+python -m pytest -q                    # 9 passed
+python -m daredevil.demo --json        # awareness map with reference backends
+python -m daredevil serve --live       # HUD at :8770, 2 sources per frame, ~160ms
+tail /tmp/daredevil.log                # per-frame: capture, separation, tracker, LLR
+```
