@@ -132,13 +132,24 @@ class Pipeline:
             ev = res.get("events") or {"class": "unknown", "confidence": 0.0, "safety_critical": False}
             pr = res.get("prosody") or {"state": "calm", "distress": 0.0}
 
-            match = self.enrollment.match(emb)
+            from .audio.utils import rms as _rms
+            energy = _rms(src.audio)
+
+            pos = None
+            if src.azimuth is not None:
+                pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
+            single_source = (len(sources) == 1)
+
+            # Match with LLR accumulation — confidence builds across frames
+            match = self.enrollment.match(emb, energy=energy)
             identity, unknown_id = None, None
             if self.enrollment.is_match(match):
                 identity = {"name": match["name"], "score": match["score"],
                             "enrollment_confidence": match["enrollment_confidence"]}
             else:
-                unknown_id = self.tracker.assign(emb)
+                unknown_id = self.tracker.assign(
+                    emb, position=pos, event_class=ev.get("class"),
+                    single_source=single_source)
 
             position = None
             if src.azimuth is not None:

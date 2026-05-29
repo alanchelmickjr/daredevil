@@ -95,7 +95,7 @@ class Thresholds:
     safety: float = 0.50           # T_safety — event confidence that triggers override
     distress: float = 0.60         # T_distress — prosodic distress that escalates priority
     unknown_track: float = 0.65    # cosine to consider two unknown frames the same source
-    vad: float = 0.012             # energy gate for "is anyone speaking"
+    vad: float = 0.004             # energy gate for "is anyone speaking"
     enroll_tau: float = 3.0        # tau_enroll — enrollment confidence time constant (s)
     surface: float = 0.45          # priority at/above which a source is routed to the LLM
 
