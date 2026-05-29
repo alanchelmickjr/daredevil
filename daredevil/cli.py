@@ -44,6 +44,12 @@ def _cmd_listen(args) -> int:
     return 0
 
 
+def _cmd_calibrate(args) -> int:
+    from .calibrate import session
+    session(name=args.name, live=args.live, seconds=args.seconds, others=args.others)
+    return 0
+
+
 def _cmd_devices(args) -> int:
     print(json.dumps(Pipeline().devices(), indent=2))
     return 0
@@ -102,6 +108,12 @@ def main(argv=None) -> int:
     pe.add_argument("-s", "--seconds", type=float, default=3.0)
     pe.add_argument("--live", action="store_true")
 
+    pc = sub.add_parser("calibrate", help="first-run 'get to know each other' session — seeds the identity model")
+    pc.add_argument("--name", default=None)
+    pc.add_argument("-s", "--seconds", type=float, default=5.0)
+    pc.add_argument("--live", action="store_true")
+    pc.add_argument("--others", action="store_true", help="also sample a TV / second voice (live)")
+
     pl = sub.add_parser("listen", help="emit one awareness map")
     pl.add_argument("--duration", type=float, default=1.0)
     pl.add_argument("--live", action="store_true")
@@ -128,6 +140,8 @@ def main(argv=None) -> int:
         return run_demo(args)
     if args.cmd == "enroll":
         return _cmd_enroll(args)
+    if args.cmd == "calibrate":
+        return _cmd_calibrate(args)
     if args.cmd == "listen":
         return _cmd_listen(args)
     if args.cmd == "serve":

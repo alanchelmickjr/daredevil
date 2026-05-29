@@ -58,6 +58,11 @@ class EnrollmentManager:
         self._B = math.log(self.idm.beta / (1.0 - self.idm.alpha))   # reject identity
         # Cumulative SPRT log-likelihood ratio (a log-odds) per (track, speaker).
         self._llr: Dict[Tuple[str, str], float] = {}
+        # CFAR-style running background model — estimated live from ambient frames so
+        # the false-alarm rate stays constant as the room changes. Seeded from the
+        # (human-calibrated or default) impostor model.
+        self._bg_mean = self.idm.impostor_mean
+        self._bg_var = self.idm.impostor_std ** 2
 
     # --- enrollment -------------------------------------------------------
     def _mean_embedding(self, audio: List[float], sr: int, win: float = 1.0) -> List[float]:
@@ -116,7 +121,37 @@ class EnrollmentManager:
             var = sum((x - mu) ** 2 for x in scores) / len(scores)
             sd = math.sqrt(var) if var > 1e-9 else self.idm.impostor_std
             return mu, max(sd, 1e-3)
+        if self.idm.adapt_background:
+            return self._bg_mean, max(math.sqrt(self._bg_var), 1e-3)
         return self.idm.impostor_mean, self.idm.impostor_std
+
+    def _update_background(self, s: float) -> None:
+        """CFAR update from an ambient frame, with a guard band so a present target
+        (a high cosine) is excluded — otherwise the target would mask itself into
+        the noise estimate, exactly the failure CFAR guard cells prevent."""
+        guard = self.idm.impostor_mean + self.idm.bg_guard_sigmas * self.idm.impostor_std
+        if s > guard:
+            return  # looks like (or near) a target — don't let it pollute the noise floor
+        r = self.idm.bg_adapt_rate
+        self._bg_mean = (1.0 - r) * self._bg_mean + r * s
+        self._bg_var = (1.0 - r) * self._bg_var + r * (s - self._bg_mean) ** 2
+
+    def _maybe_refine(self, rec: dict, vector: Sequence[float], acc: float,
+                      raw: float, quality: float) -> None:
+        """Guarded online enrollment: nudge the voiceprint toward a frame only when
+        the match is overwhelming (well past the Wald bound, very high cosine, loud).
+        Off by default — auto-refining identity is poisonable, so the bar is high."""
+        if not (acc >= self._A + self.idm.target_adapt_margin
+                and raw >= self.idm.immediate_cosine and quality >= 0.9):
+            return
+        r = self.idm.target_adapt_rate
+        old = rec["vector"]
+        m = min(len(old), len(vector))
+        merged = [(1.0 - r) * old[i] + r * vector[i] for i in range(m)]
+        norm = math.sqrt(sum(x * x for x in merged)) or 1.0
+        rec["vector"] = [x / norm for x in merged]
+        rec["n_samples"] = rec.get("n_samples", 1) + 1
+        self.store.put(rec["name"], rec)
 
     def _frame_quality(self, energy: float) -> float:
         """Evidential weight in [0, 1]: silence carries none, loud-enough carries full."""
@@ -145,9 +180,11 @@ class EnrollmentManager:
         idm = self.idm
 
         best = None
+        raws = []
         for rec in records:
             name = rec["name"]
             s = cosine(vector, rec["vector"])
+            raws.append(s)
             others = [v for v in cohort if v is not rec["vector"]]
             mu0, sd0 = self._background_stats(vector, others)
 
@@ -165,6 +202,9 @@ class EnrollmentManager:
             immediate = s >= idm.immediate_cosine          # one very clean frame is enough
             decided = immediate or acc >= self._A
 
+            if idm.adapt_target and quality > 0.0:
+                self._maybe_refine(rec, vector, acc, s, quality)
+
             cand = {
                 "name": name, "raw": round(s, 4), "llr": acc,
                 "score": 1.0 if immediate else posterior,
@@ -173,6 +213,10 @@ class EnrollmentManager:
             }
             if best is None or cand["llr"] > best["llr"]:
                 best = cand
+
+        # CFAR: refresh the live noise floor from the most background-like score.
+        if idm.adapt_background and raws and quality > 0.0:
+            self._update_background(min(raws))
         return best
 
     def is_match(self, m: Optional[dict]) -> bool:

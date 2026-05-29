@@ -44,6 +44,7 @@ only *accelerate* the same pipeline.
 | `daredevil mcp` | Run as MCP server (stdio) for Claude / LLM agents. |
 | `daredevil bench [--iters 10]` | Crowd-scaling benchmark. |
 | `daredevil enroll --name NAME [-s 3] [--live]` | Enroll a speaker. |
+| `daredevil calibrate [--name N] [--live] [--others]` | First-run "get to know each other" session — seeds the identity model from your real voice + room. |
 | `daredevil listen [--duration 1.0] [--live] [--json]` | Emit one awareness map. |
 | `daredevil devices` | Detected array + installed backends. |
 

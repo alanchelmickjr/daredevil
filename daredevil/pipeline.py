@@ -51,6 +51,11 @@ class Pipeline:
     def __init__(self, config: Optional[Config] = None,
                  array: Optional[MicArray] = None, warmup: bool = False):
         self.config = config or Config()
+        # Use the human-seeded identity model from the onboarding session, if any.
+        from .config import load_calibration
+        _cal = load_calibration(self.config.resolved_data_dir())
+        if _cal is not None:
+            self.config.identity = _cal
         backend = self.config.resolved_backend()
         slot_backend = "fallback" if backend == "fallback" else "auto"
 

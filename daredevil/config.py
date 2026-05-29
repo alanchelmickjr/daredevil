@@ -7,6 +7,7 @@ priority sum) so the software and the firmware speak the same language.
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -23,6 +24,8 @@ __all__ = [
     "is_safety_critical",
     "detect_backend",
     "default_data_dir",
+    "load_calibration",
+    "calibration_path",
 ]
 
 # AudioSet-style labels that trigger a hard priority override in Stage 3.
@@ -134,6 +137,16 @@ class IdentityModel:
     immediate_cosine: float = 0.80 # a single frame this strong matches outright
     quality_full_energy: float = 0.02  # energy at which a frame carries full evidential weight
 
+    # --- real-time auto-calibration (CFAR: hold the false-alarm rate constant as
+    # the room changes). The human onboarding session seeds the first model; these
+    # keep H0 — and optionally the voiceprint — tuned as we go.
+    adapt_background: bool = True       # online-estimate H0 from live ambient audio
+    bg_adapt_rate: float = 0.02         # EMA rate for the running background model
+    bg_guard_sigmas: float = 1.5        # only frames within this band of H0 feed it (CFAR guard cells)
+    adapt_target: bool = False          # online-refine the voiceprint when very confidently matched
+    target_adapt_rate: float = 0.05     # EMA rate for adaptive enrollment (guarded)
+    target_adapt_margin: float = 2.0    # LLR must clear bound A by this margin before refining
+
 
 @dataclass
 class TrackerParams:
@@ -183,6 +196,27 @@ def default_data_dir() -> Path:
     env = os.environ.get("DAREDEVIL_HOME")
     base = Path(env) if env else Path.home() / ".daredevil"
     return base
+
+
+def calibration_path(data_dir) -> Path:
+    return Path(data_dir) / "calibration.json"
+
+
+def load_calibration(data_dir) -> Optional["IdentityModel"]:
+    """Load a human-seeded IdentityModel from <data_dir>/calibration.json, if present.
+
+    Returns None when there is no calibration file (cold start uses defaults). The
+    file is written by the onboarding session (`daredevil calibrate`).
+    """
+    p = calibration_path(data_dir)
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text())
+        fields = IdentityModel.__dataclass_fields__
+        return IdentityModel(**{k: v for k, v in d.items() if k in fields})
+    except Exception:
+        return None
 
 
 def detect_backend() -> str:
