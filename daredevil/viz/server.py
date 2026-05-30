@@ -216,6 +216,38 @@ class _State:
         self.pipe.config.focus = None
         self._focus_id = None
 
+    def _transcribe(self) -> str:
+        """Run whisper-cli on the last captured audio for the focused source."""
+        import subprocess
+        import tempfile
+        import wave
+        import struct
+
+        if not self._focus_audio:
+            return ""
+        audio, sr = self._focus_audio
+        # Write a temp WAV for whisper-cli
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        try:
+            with wave.open(tmp.name, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(sr)
+                frames = struct.pack("<%dh" % len(audio),
+                                     *[max(-32768, min(32767, int(s * 32767))) for s in audio])
+                w.writeframes(frames)
+            model = str(Path.home() / ".daredevil/models/whisper/ggml-base.en.bin")
+            result = subprocess.run(
+                ["whisper-cli", "--model", model, "--file", tmp.name,
+                 "--no-timestamps", "--no-prints"],
+                capture_output=True, text=True, timeout=5)
+            return result.stdout.strip()
+        except Exception as e:
+            log.warning(f"transcribe failed: {e}")
+            return ""
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
     def awareness(self) -> dict:
         # During calibration, the mic is exclusively owned by the cal thread.
         if self.cal.status["active"] or self._busy:
@@ -226,13 +258,24 @@ class _State:
                 "embeddings": "non-reversible"}}
         self._busy = True
         try:
-            amap = self.pipe.listen(duration=1.0, source=self.source)
+            amap, audio, sr = self.pipe.listen(duration=1.0, source=self.source,
+                                               return_audio=True)
+            # Store audio for transcription if a source is focused
+            self._focus_audio = (audio, sr) if self._focus_id else None
             amap["wake_word"] = self.pipe.config.wake_word
             amap["focus"] = self._focus_id
             amap["accumulator"] = {
                 "sources": len(self.pipe.accumulator.sources),
                 "top_llr": self.pipe.enrollment.top_llr(),
             }
+            # Transcribe the focused source if present and speaking
+            if self._focus_id and self._focus_audio:
+                focused = [s for s in amap.get("sources", [])
+                           if s["id"] == self._focus_id]
+                if focused and focused[0].get("event", {}).get("class", "").lower() in (
+                        "speech", "speech synthesizer", "narration", "conversation"):
+                    amap["transcript"] = {"source": self._focus_id,
+                                          "text": self._transcribe()}
             self._last = amap
             return amap
         finally:
