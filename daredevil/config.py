@@ -164,8 +164,8 @@ class TrackerParams:
     bearing_assist: float = 0.15   # embedding slack permitted when bearing agrees
     confirm_hits: int = 2          # M-of-N: hits to promote TENTATIVE -> CONFIRMED
     confirm_window_s: float = 3.0  # window over which confirm_hits must accrue
-    coast_s: float = 5.0           # keep a missed track COASTING this long
-    delete_s: float = 15.0         # delete a track after this much silence
+    coast_s: float = 15.0          # keep a missed track COASTING this long
+    delete_s: float = 45.0         # delete a track after this much silence
     bearing_alpha: float = 0.5     # alpha-beta position-filter gains
     bearing_beta: float = 0.1
     recency_bonus: float = 0.10    # association tie-break bonus for very recent tracks

@@ -150,6 +150,17 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 - All tunables live in `config.py` (`IdentityModel`, `TrackerParams`, `SeparationParams`)
   — no magic literals in the logic. 17 tests pass on stdlib alone.
 
+## In progress (2026-05-30)
+
+1. **LLR progress bar on UNKNOWN cards** — When a voiceprint is enrolled, UNKNOWN
+   contacts that are being identified show a progress bar: the SPRT's LLR building
+   toward the Wald bound. "Identifying... 40%... 70%... ALAN." Real-time Name That
+   Tune feedback so the user sees the system working, not a sudden flip.
+
+2. **Persist SPRT state across restarts** — Save the LLR accumulators to disk so a
+   server restart doesn't mean cold start. Known voices re-lock in 1 frame instead
+   of rebuilding from zero.
+
 ## Known issues / next work (prioritized)
 
 1. **Quality-gated identity accumulator (THE BLOCKER)** — The tracker spawns new
