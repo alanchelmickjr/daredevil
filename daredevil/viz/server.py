@@ -351,10 +351,17 @@ def _make_handler(state: _State):
 
 
 def serve(port: int = 8770, live: bool = False, host: str = "127.0.0.1") -> int:
+    log_path = "/tmp/daredevil.log"
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_path, mode="a"),
+        ],
     )
+    logging.getLogger("daredevil").info(f"=== SERVER START === log: {log_path}")
     state = _State(live=live)
     httpd = ThreadingHTTPServer((host, port), _make_handler(state))
     scene = "live mic" if live else "synthetic scene"

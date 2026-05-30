@@ -211,7 +211,9 @@ class Pipeline:
                          f"({identifying['progress']*100:.0f}%)")
             else:
                 bl = match["llr"] if match else 0.0
-                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} best_llr={bl:.2f}")
+                raw = match["raw"] if match else 0.0
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
+                         f"cos={raw:.3f} llr={bl:.2f}")
 
             t_status = self.tracker.status_of(track_id) or "confirmed"
             records.append({"identity": identity, "identifying": identifying,
