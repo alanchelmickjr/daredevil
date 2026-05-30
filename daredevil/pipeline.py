@@ -128,10 +128,8 @@ class Pipeline:
         log.info(f"capture: {cap.source} {cap.duration:.1f}s rms={_rms_fn(cap.mono):.4f}")
         spatial_sources: List[SpatialSource] = self.stage1.process(cap)
 
-        # --- Stage 1.5: source separation — only split when there really are
-        # multiple, distinct contacts. On a single talker, ConvTasNet manufactures
-        # a low-energy artifact stream; band-limiting through it would also corrupt
-        # the voiceprint, so we keep the clean wideband audio and let WHO run on it.
+        # --- Stage 1.5: source separation — split when there are genuinely
+        # multiple distinct contacts. Single source keeps clean wideband audio.
         sep = self.config.separation
         sources: List[SpatialSource] = []
         for src in spatial_sources:
@@ -142,7 +140,7 @@ class Pipeline:
             active = self._active_streams(streams, sep)
             log.info(f"separation: {len(streams)} stream(s) -> {len(active)} active contact(s)")
             if len(active) <= 1:
-                sources.append(src)  # single contact: keep clean wideband audio
+                sources.append(src)
             else:
                 for st in active:
                     sources.append(SpatialSource(
@@ -187,28 +185,15 @@ class Pipeline:
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
 
-            # Quality gate: energy-only. The SPRT decides if the embedding matches —
-            # the gate's job is just to reject silence. PANNs event class is irrelevant
-            # here (it says "Music" when music is louder, but ECAPA still got your voice).
-            quality = min(1.0, energy / 0.05) if energy > self.config.thresholds.vad else 0.0
-            acc_id = self.accumulator.ingest(emb, quality)
-
-            # Use the accumulated centroid for matching if available — it's more
-            # stable than any single frame. Fall back to raw embedding otherwise.
-            match_emb = emb
-            if acc_id is not None:
-                centroid = self.accumulator.get_centroid(acc_id)
-                if centroid is not None:
-                    match_emb = centroid
-
-            # Tracker uses NMF spectral feature (frame-stable) for association;
-            # ECAPA is too jittery frame-to-frame for tracking continuity.
+            # Tracker for spatial continuity / display.
             track_feat = self.spectral.feature(src.audio, src.sr) if self.spectral else emb
             track_id = self.tracker.assign(track_feat, position=pos, event_class=ev.get("class"))
 
-            # SPRT accumulates per accumulator source (stable) not per track (thrashes).
-            acc_key = f"acc-{acc_id}" if acc_id is not None else track_id
-            match = self.enrollment.match(match_emb, energy=energy, key=acc_key)
+            # Identity: one SPRT per enrolled speaker, keyed by speaker name alone.
+            # Every frame above VAD gets scored. No track ID, no source ID — just
+            # "does this embedding sound like alan?" Evidence accumulates across all
+            # frames regardless of tracker thrash. The $2 chip approach.
+            match = self.enrollment.match(emb, energy=energy, key="global")
 
             identity = None
             if self.enrollment.is_match(match):
@@ -220,8 +205,26 @@ class Pipeline:
                 bl = match["llr"] if match else 0.0
                 log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} best_llr={bl:.2f}")
 
+            t_status = self.tracker.status_of(track_id) or "confirmed"
             records.append({"identity": identity, "unknown_id": track_id,
-                            "event": ev, "prosody": pr, "position": pos})
+                            "event": ev, "prosody": pr, "position": pos,
+                            "track_status": t_status})
+
+        # Include coasting tracks that weren't seen this frame — they persist
+        # on the radar until they age out. Status tells the HUD what to do:
+        # confirmed = on radar, coasting = fade to sidebar, tentative = dim.
+        seen_ids = {r["unknown_id"] for r in records}
+        for t in self.tracker._tracks:
+            if t["id"] not in seen_ids:
+                records.append({
+                    "identity": None, "unknown_id": t["id"],
+                    "event": {"class": t.get("event_class") or "unknown",
+                              "confidence": 0.0, "safety_critical": False},
+                    "prosody": {"state": "calm", "distress": 0.0},
+                    "position": {"azimuth": t.get("azimuth"), "elevation": 0.0}
+                    if t.get("azimuth") is not None else None,
+                    "track_status": t["status"],
+                })
 
         # Forget SPRT accumulators for contacts that have aged out.
         self.enrollment.retain(self.tracker.live_ids())

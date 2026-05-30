@@ -200,6 +200,7 @@ function render(map){
     seen[s.id]=now;
     const surfaced=s.attention==='surface',safety=s.event&&s.event.safety_critical;
     const enrolled=s.type==='enrolled';
+    const coasting=s.track_status==='coasting';
     const col=safety?'#ff5a6e':(surfaced?'#5ef0a0':'#6b5d47');
     let c=cards[s.id];
     if(!c){c=makeCard(s);cards[s.id]=c;}
@@ -211,8 +212,14 @@ function render(map){
         known.appendChild(c);}
       c.className='card surface';
       c.style.opacity='';
+    } else if(coasting){
+      // coasting = lost contact, fade to sidebar
+      if(c.parentNode!==sidebar){c.remove();
+        c.style.left='';c.style.top='';c.style.position='relative';
+        c.style.transform='none';c.style.width='100%';
+        c.className='card stale';sidebar.appendChild(c);}
     } else {
-      // unknown active sources orbit on the radar
+      // active unknown sources orbit on the radar
       if(c.parentNode!==stage){c.remove();stage.appendChild(c);}
       const az=Math.round(((s.position&&s.position.azimuth)||0)/15)*15;
       const bucket=azBuckets[az]||[s];
@@ -311,7 +318,7 @@ calDone.onclick=closeCal;
 
 calStart.onclick=()=>{
   fetch('/calibrate/start',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:'you',seconds:20,others:true})})
+    body:JSON.stringify({name:'alan',seconds:20,others:true})})
   .then(()=>{
     calStart.style.display='none';calNext.style.display='';
     calPrompt.textContent='Ready. Hit NEXT PHASE when you\'re set to talk.';

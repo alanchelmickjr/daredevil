@@ -95,6 +95,24 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ---
 
+## Recently fixed (2026-05-30 session)
+
+- **Global SPRT key** — identity accumulates per enrolled speaker name, not per
+  tracker contact. One SPRT for "alan" that persists regardless of track thrash.
+- **Energy-only accumulator gate** — removed PANNs event-class gating. Music/noise
+  no longer blocks identity accumulation; the SPRT decides match, not the gate.
+- **Coasting tracks in awareness output** — the HUD now shows all live tracker
+  contacts, not just what the current frame detected. Contacts fade to sidebar
+  when coasting (lost for >5s), removed at 15s.
+- **Track status in awareness map** — `track_status` field (tentative/confirmed/coasting)
+  lets the HUD render contacts differently based on confidence.
+- **Calibration HUD panel** — neumorphic modal overlay with 3-2-1 countdown, level
+  meter, progress bar, d-prime result. Triggered by Calibrate chip or double-click core.
+- **Calibration active flag fix** — awareness endpoint was returning stale cached data
+  after calibration completed because `active` was never set back to false.
+- **Reverted sub-windowing** — 200ms chunks broke PANNs classification (needs 1s).
+  Restored full 1s capture with ConvTasNet separation.
+
 ## Recently fixed (2026-05-29 session)
 
 - **Mic device selection** — `capture_live()` now picks the first input device with

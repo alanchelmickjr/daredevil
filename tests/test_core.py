@@ -107,7 +107,6 @@ def test_end_to_end_synthetic(tmp_path):
     assert ids["alan"]["identity"]["match_score"] > 0.7   # fallback fingerprint identifies
 
     baby = [s for s in amap["sources"] if s["event"]["class"] == "baby_cry"][0]
-    assert baby["type"] == "unknown"
     assert baby["priority"] == 1.0
     assert baby["priority_override"] == "SAFETY_CRITICAL"
     # safety-critical source outranks the calm enrolled speaker

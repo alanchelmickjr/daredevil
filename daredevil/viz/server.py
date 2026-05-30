@@ -96,15 +96,28 @@ class _CalibrationSession:
         return None
 
     def _run_phase(self, phase: str):
+        # Enough text to fill 20s of natural reading at conversational pace.
+        # Diverse prosody: questions, statements, counting, whispering cue.
         prompts = {
-            "voice": "SPEAK — talk to me like I’m across the table",
-            "background": "SHUT UP — hands off, mouth closed, let the room breathe",
-            "world": "THE WORLD — let the chaos in, turn it up",
+            "voice": "My name is {name}. I believe that humans and AI "
+                     "are meant to work together — not to replace each other, "
+                     "but to elevate what each does best. "
+                     "A machine can hear patterns no ear can catch. "
+                     "A person knows what those patterns mean. "
+                     "Together we build things neither can alone. "
+                     "The future isn’t artificial or human — it’s both, "
+                     "amplifying the best of the human condition. "
+                     "One... two... three... four... five. "
+                     "Can you hear me when I get quiet? "
+                     "Good. That’s all you need — just my voice, "
+                     "and twenty seconds of trust.",
+            "background": "SHUT UP — mouth closed, don’t move. Let the room do its thing.",
+            "world": "THE WORLD — crank the music, open the window, whatever isn’t you.",
             "fitting": "Crunching numbers…",
         }
         idx = {"voice": 1, "background": 2, "world": 3, "fitting": 0}[phase]
         self.status["phase_index"] = idx
-        self.status["prompt"] = prompts[phase]
+        self.status["prompt"] = prompts[phase].replace("{name}", self._name)
 
         if phase == "fitting":
             self._do_fit()
@@ -174,6 +187,7 @@ class _CalibrationSession:
         err = _dprime_error_pct(dprime)
         quality = "good" if dprime >= 2.5 else ("fair" if dprime >= 1.5 else "poor")
         self.status.update({
+            "active": False,
             "phase": "done", "dprime": round(dprime, 2), "error_pct": err,
             "model": asdict(model), "quality": quality,
             "prompt": f"Done! d′ = {dprime:.2f} ({err})",
@@ -193,8 +207,13 @@ class _State:
         self.cal = _CalibrationSession(self)
 
     def awareness(self) -> dict:
-        if self._busy and self._last is not None:
-            return self._last
+        # During calibration, the mic is exclusively owned by the cal thread.
+        if self.cal.status["active"] or self._busy:
+            if self._last is not None:
+                return self._last
+            return {"sources": [], "timing": {}, "privacy": {
+                "cloud_used": False, "raw_audio_stored": False,
+                "embeddings": "non-reversible"}}
         self._busy = True
         try:
             amap = self.pipe.listen(duration=1.0, source=self.source)
