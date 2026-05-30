@@ -204,7 +204,17 @@ class _State:
         self.pipe.warmup()
         self._last = None
         self._busy = False
+        self._focus_id = None
         self.cal = _CalibrationSession(self)
+
+    def set_focus(self, source_id: str):
+        """Set the focused source — only this source gets transcribed and routed to the LLM."""
+        self.pipe.config.focus = source_id
+        self._focus_id = source_id
+
+    def clear_focus(self):
+        self.pipe.config.focus = None
+        self._focus_id = None
 
     def awareness(self) -> dict:
         # During calibration, the mic is exclusively owned by the cal thread.
@@ -218,6 +228,7 @@ class _State:
         try:
             amap = self.pipe.listen(duration=1.0, source=self.source)
             amap["wake_word"] = self.pipe.config.wake_word
+            amap["focus"] = self._focus_id
             amap["accumulator"] = {
                 "sources": len(self.pipe.accumulator.sources),
                 "top_llr": self.pipe.enrollment.top_llr(),
@@ -283,6 +294,14 @@ def _make_handler(state: _State):
             if u.path == "/calibrate/phase":
                 state.cal.advance()
                 return self._send(200, json.dumps({"ok": True}))
+            if u.path == "/focus":
+                params = json.loads(body) if body else {}
+                sid = params.get("id")
+                if sid:
+                    state.set_focus(sid)
+                else:
+                    state.clear_focus()
+                return self._send(200, json.dumps({"ok": True, "focus": state._focus_id}))
             return self._send(404, json.dumps({"error": "not found"}))
 
     return Handler

@@ -183,7 +183,7 @@ function makeCard(s){
   const c=document.createElement('div');c.className='card';
   c.innerHTML='<div class="hd"><span class="who"></span><span class="pr"></span></div>'
     +'<canvas></canvas><div class="ft"></div><div class="bar"><i></i></div><div class="gate"></div>';
-  c.onclick=()=>probe(s.id);
+  c.onclick=()=>setFocus(s.id);
   return c;}
 function render(map){
   const now=Date.now(),cx=innerWidth/2,cy=innerHeight/2;links.innerHTML='';
@@ -242,6 +242,9 @@ function render(map){
       c.querySelector('.bar i').style.background='';
       c.querySelector('.gate').textContent=surfaced?'→ ROUTED TO LLM':'gated · ambient';
     }
+    // Focus highlight
+    if(s.id===focusId||map.focus===s.id){c.style.boxShadow='0 0 16px var(--grn), 6px 6px 14px var(--sd)';c.style.borderColor='var(--grn)';}
+    else{c.style.boxShadow='';c.style.borderColor='';}
     waveDraw(c.querySelector('canvas'),FREQ[s.event.class]||4,col);
     // draw link line for non-enrolled active sources
     if(!enrolled){
@@ -284,7 +287,12 @@ function say(html,ms){bubble.style.display='block';bubble.innerHTML=html;
 function probe(id){fetch('/probe?id='+encodeURIComponent(id)).then(r=>r.json())
   .then(d=>say(d.implemented===false ? ('<b>'+d.id+'</b><br>TODO: '+d.todo)
                                      : ('<b>'+d.id+' → LLM</b><br>'+d.transcript))).catch(()=>{});}
-core.onclick=()=>say('<b>focus</b><br>listening for your command… (push-to-talk)');
+let focusId=null;
+function setFocus(id){
+  if(focusId===id){focusId=null;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});say('focus cleared');}
+  else{focusId=id;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});say('<b>focused:</b> '+id+'<br>only this source talks to the LLM');}
+}
+core.onclick=()=>{if(focusId){setFocus(focusId);}else{say('click a source card to focus');}};
 function poll(){
   fetch('/awareness',{signal:AbortSignal.timeout(5000)})
     .then(r=>r.json()).then(d=>{render(d);setTimeout(poll,POLL_MS);})
