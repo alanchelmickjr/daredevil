@@ -69,11 +69,20 @@ class Separator:
                 with torch.no_grad():
                     separated = self._model(x)  # [1, n_sources, time]
 
-                sources = []
+                # ConvTasNet amplifies wildly — normalize total output energy
+                # to match the input so downstream slots and tracker see sane values.
+                input_energy = rms(resampled) or 1e-6
+                raw_streams = []
                 for i in range(separated.shape[1]):
                     stream = separated[0, i].tolist()
-                    # Resample back to pipeline rate
                     stream_at_sr = resample(stream, self._sample_rate, sr)
+                    raw_streams.append(stream_at_sr)
+                total_energy = sum(rms(s) for s in raw_streams) or 1e-6
+                scale = input_energy / total_energy
+
+                sources = []
+                for stream_at_sr in raw_streams:
+                    stream_at_sr = [v * scale for v in stream_at_sr]
                     energy = rms(stream_at_sr)
                     if energy > min_energy:
                         sources.append({

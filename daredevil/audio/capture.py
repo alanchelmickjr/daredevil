@@ -203,16 +203,42 @@ def capture_file(path: str, sr_hint: Optional[int] = None) -> CaptureResult:
                          array=detect_array(channels=nch), source=str(p))
 
 
+def _pick_input_device():
+    """Find the first input device that actually delivers audio.
+
+    AirPods and some Bluetooth devices show up as the default input but return
+    zeros when not in a call/voice profile.  Fall back to a device that has a
+    native sample rate >= 44.1 kHz (rules out dead BT SCO endpoints).
+    """
+    import sounddevice as sd
+    default_idx = sd.default.device[0]
+    devs = sd.query_devices()
+    default = devs[default_idx] if default_idx is not None else None
+    if default and default["max_input_channels"] > 0 and default["default_samplerate"] >= 44100:
+        return default_idx, int(default["default_samplerate"])
+    # Default looks suspect (e.g. BT at 24kHz) — find the built-in mic.
+    for i, d in enumerate(devs):
+        if d["max_input_channels"] > 0 and d["default_samplerate"] >= 44100:
+            return i, int(d["default_samplerate"])
+    # Last resort: use whatever the OS says, at its native rate.
+    if default and default["max_input_channels"] > 0:
+        return default_idx, int(default["default_samplerate"])
+    return None, 48000
+
+
 def capture_live(seconds: float = 1.0, sr: int = 48000,
                  array: Optional[MicArray] = None) -> CaptureResult:
-    """Record from the default input device via sounddevice (PortAudio, MIT)."""
+    """Record from the best available input device via sounddevice (PortAudio, MIT)."""
     import sounddevice as sd  # raises if unavailable -> caller falls back
     arr = array or detect_array()
     nch = max(1, arr.n_mics)
-    rec = sd.rec(int(seconds * sr), samplerate=sr, channels=nch, dtype="float32")
+    dev_idx, native_sr = _pick_input_device()
+    use_sr = native_sr if native_sr >= 44100 else sr
+    rec = sd.rec(int(seconds * use_sr), samplerate=use_sr, channels=nch,
+                 device=dev_idx, dtype="float32")
     sd.wait()
     channels = [rec[:, c].tolist() for c in range(nch)]
-    return CaptureResult(channels=channels, sample_rate=sr, array=arr, source="live")
+    return CaptureResult(channels=channels, sample_rate=use_sr, array=arr, source="live")
 
 
 def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",

@@ -117,7 +117,7 @@ def _level_note(level: float) -> str:
     return "loud and clear"
 
 
-def session(name: Optional[str] = None, live: bool = False, seconds: float = 5.0,
+def session(name: Optional[str] = None, live: bool = False, seconds: float = 20.0,
             others: bool = False, config: Optional[Config] = None) -> dict:
     """Run the onboarding session. Returns {model, dprime, path, stats}.
 
@@ -144,21 +144,26 @@ def session(name: Optional[str] = None, live: bool = False, seconds: float = 5.0
     if not live:
         print("    SYNTHETIC mode: simulating a voice + room so the flow is exact.\n")
 
-    # --- Phase 1: your voice (enroll + measure same-speaker cosine) -------
-    print("▶ 1/3  your voice")
-    print(f'   "{_VOICE_PROMPTS[0]}"')
+    # Wipe any stale voiceprint so we start clean on this mic/room.
+    if pipe.store.get(name):
+        pipe.store.delete(name)
+
+    # --- Phase 1: your voice (fresh enrollment + measure same-speaker cosine)
+    # ONE recording, used for both enrollment and verification measurement.
+    print("▶ 1/3  SPEAK — talk to me like I'm across the table")
+    print('   Say anything — what you had for breakfast, curse at the traffic, whatever.')
     wait("   ↵ press Enter, then talk… ")
-    enr = pipe.enroll(name, mic_seconds=seconds, source=source)
-    voiceprint = pipe.store.get(name)["vector"]
     audio, sr, level, synth = cal.capture_audio(seconds, source, name=name)
+    enr = pipe.enrollment.enroll(audio, sr, name, seconds)
+    voiceprint = pipe.store.get(name)["vector"]
     target_cos = cal.cosines_to(audio, sr, voiceprint)
     print(f"   ✓ got you — {_level_note(level)}  (level {level:.2f}, "
           f"{len(target_cos)} voice frames, conf {enr['enrollment_confidence']:.2f})")
 
     # --- Phase 2: your room (background) ----------------------------------
-    print("\n▶ 2/3  your room")
-    print('   "Now just let the room be — don\'t talk for a few seconds."')
-    wait("   ↵ press Enter and stay quiet… ")
+    print("\n▶ 2/3  SHUT UP — let the world talk for a sec")
+    print('   Hands off, mouth closed. Let the room breathe.')
+    wait("   ↵ press Enter, then zip it… ")
     # In synthetic mode, the "room" is ambient only (no enrolled voice) so the
     # measured background is representative; live mode records the real room.
     room_scene = None if live else _AMBIENT_SCENE
@@ -168,14 +173,14 @@ def session(name: Optional[str] = None, live: bool = False, seconds: float = 5.0
 
     # --- Phase 3: anyone else (optional, live only) -----------------------
     if others and live:
-        print("\n▶ 3/3  anyone else? (optional)")
-        print('   "If there\'s a TV, music, or another person — let them talk now."')
-        wait("   ↵ press Enter when it's playing… ")
+        print("\n▶ 3/3  THE WORLD — let the chaos in")
+        print('   Turn up the TV, let the horns honk, whatever isn\'t you.')
+        wait("   ↵ press Enter when it's noisy… ")
         other_audio, osr, _, _ = cal.capture_audio(seconds, source)
         bg_cos += cal.cosines_to(other_audio, osr, voiceprint)
         print(f"   ✓ noted  ({len(bg_cos)} background frames total)")
     else:
-        print("\n▶ 3/3  anyone else? — skipped (room tone only)")
+        print("\n▶ 3/3  THE WORLD — skipped (room tone only)")
 
     # --- fit + save -------------------------------------------------------
     model, dprime = cal.fit(target_cos, bg_cos)

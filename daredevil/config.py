@@ -186,7 +186,8 @@ class SeparationParams:
 
     min_energy: float = 0.003      # below this RMS a separated stream is silence
     dominance_ratio: float = 0.35  # a 2nd stream must reach this fraction of the primary's energy
-    distinct_cosine: float = 0.85  # streams more similar than this are the same source
+    distinct_cosine: float = 0.60  # streams more similar than this are the same source
+    energy_ratio_cap: float = 0.80 # if streams are this similar in energy, it's one source split in half
 
 
 @dataclass

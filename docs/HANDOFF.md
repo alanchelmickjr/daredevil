@@ -95,7 +95,24 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ---
 
-## Recently fixed (WHO matching + tracking stitch)
+## Recently fixed (2026-05-29 session)
+
+- **Mic device selection** — `capture_live()` now picks the first input device with
+  native rate ≥ 44.1kHz, skipping dead Bluetooth endpoints (AirPods Max at 24kHz
+  returns zeros when not in call mode). MacBook Air mic is the reliable default.
+- **ConvTasNet energy normalization** — separated streams were amplified 100-1000x
+  (RMS 87 from a 0.07 input). Now normalized so total output energy matches input,
+  preserving relative proportions between streams.
+- **Separation energy-ratio gate** — ConvTasNet always outputs 2 streams even for a
+  single speaker, splitting harmonics 50/50. New `energy_ratio_cap=0.80` check:
+  if two streams have nearly equal energy, it's one source split in half, not two
+  real sources. Combined with lowered `distinct_cosine=0.60`.
+- **Calibrate wipes stale voiceprint** — enrollment during calibration now deletes the
+  old record first so you're never measuring against a voiceprint from a different
+  mic/session. Single recording used for both enrollment and verification (no double-
+  record UX bug). Default bumped to 20s.
+
+## Previously fixed (WHO matching + tracking stitch)
 
 - **Wald SPRT identity classifier** — `enrollment/manager.py` now accumulates a true
   per-frame log-likelihood ratio `logN(s;target) − logN(s;background)` and decides at
@@ -117,13 +134,27 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ## Known issues / next work (prioritized)
 
-1. **Feed-forward attention filter** — The gate should feed state back to the beginning of the next loop. Ambient sources get lightweight checks instead of full processing. Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
+1. **Quality-gated identity accumulator (THE BLOCKER)** — The tracker spawns new
+   contacts frame-to-frame instead of collecting good embeddings into one identity.
+   Fix: decouple identity accumulation from the tracker's frame-to-frame association.
+   Collect *only* high-quality frames (Speech-classified, high energy, above VAD) into
+   a per-source centroid that persists across tracker thrash. Match against enrolled DB
+   progressively — confidence grows as good chunks coalesce, doesn't require continuous
+   signal. This is how Shazam, Content ID, pyannote, and every production system works:
+   quality gate → per-source accumulator → progressive match → decay.
+   The SPRT math is correct; it's being starved of evidence because the tracker resets it.
 
-2. **Calibrate the SPRT score models on real ECAPA** — `IdentityModel` defaults
-   (`target_mean=0.65`, `impostor_mean=0.18`, …) are from published VoxCeleb stats;
-   measure your own enrolled cohort and tune them (and `alpha`/`beta`) to the live mic.
+2. **Calibration + enrollment UX in the web HUD** — Move the calibrate flow out of CLI
+   into the neumorphic HUD. 20s enrollment with guided prompts ("SPEAK" / "SHUT UP" /
+   "THE WORLD"), real-time level feedback, d-prime readiness display, and a countdown
+   so the user knows when recording starts. The CLI version works but the timing is
+   invisible — user can't tell when to talk.
 
-3. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
+3. **Feed-forward attention filter** — The gate should feed state back to the beginning
+   of the next loop. Ambient sources get lightweight checks instead of full processing.
+   Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
+
+4. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
 
 5. **Live wake word** — openWakeWord ("Hey Radar") to steer focus.
 
