@@ -205,6 +205,10 @@ class _State:
         self._last = None
         self._busy = False
         self._focus_id = None
+        self._focus_audio = None
+        self._speech_buf: list = []
+        self._speech_sr: int = 16000
+        self._speech_active = False
         self.cal = _CalibrationSession(self)
 
     def set_focus(self, source_id: str):
@@ -216,17 +220,17 @@ class _State:
         self.pipe.config.focus = None
         self._focus_id = None
 
-    def _transcribe(self) -> str:
-        """Run whisper-cli on the last captured audio for the focused source."""
+    def _transcribe_buf(self) -> str:
+        """Run whisper-cli on the buffered speech audio (accumulated across frames)."""
         import subprocess
         import tempfile
         import wave
         import struct
 
-        if not self._focus_audio:
+        if not self._speech_buf:
             return ""
-        audio, sr = self._focus_audio
-        # Write a temp WAV for whisper-cli
+        audio = self._speech_buf
+        sr = self._speech_sr
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         try:
             with wave.open(tmp.name, "wb") as w:
@@ -240,8 +244,11 @@ class _State:
             result = subprocess.run(
                 ["whisper-cli", "--model", model, "--file", tmp.name,
                  "--no-timestamps", "--no-prints"],
-                capture_output=True, text=True, timeout=5)
-            return result.stdout.strip()
+                capture_output=True, text=True, timeout=10)
+            text = result.stdout.strip()
+            if text:
+                log.info(f"transcribe: {len(audio)/sr:.1f}s → \"{text}\"")
+            return text
         except Exception as e:
             log.warning(f"transcribe failed: {e}")
             return ""
@@ -260,22 +267,32 @@ class _State:
         try:
             amap, audio, sr = self.pipe.listen(duration=1.0, source=self.source,
                                                return_audio=True)
-            # Store audio for transcription if a source is focused
-            self._focus_audio = (audio, sr) if self._focus_id else None
+            self._speech_sr = sr
             amap["wake_word"] = self.pipe.config.wake_word
             amap["focus"] = self._focus_id
             amap["accumulator"] = {
                 "sources": len(self.pipe.accumulator.sources),
                 "top_llr": self.pipe.enrollment.top_llr(),
             }
-            # Transcribe the focused source if present and speaking
-            if self._focus_id and self._focus_audio:
+            # Buffer-on-speech, flush-on-pause transcription.
+            # Accumulate audio while the focused source is speaking;
+            # transcribe when they pause (energy drops below VAD).
+            from .audio.utils import rms as _rms_check
+            speaking_now = False
+            if self._focus_id and audio:
                 focused = [s for s in amap.get("sources", [])
                            if s["id"] == self._focus_id]
-                if focused and focused[0].get("event", {}).get("class", "").lower() in (
-                        "speech", "speech synthesizer", "narration", "conversation"):
-                    amap["transcript"] = {"source": self._focus_id,
-                                          "text": self._transcribe()}
+                if focused and _rms_check(audio) > self.pipe.config.thresholds.vad * 3:
+                    speaking_now = True
+                    self._speech_buf.extend(audio)
+                    self._speech_active = True
+
+            if self._speech_active and not speaking_now and self._speech_buf:
+                text = self._transcribe_buf()
+                if text:
+                    amap["transcript"] = {"source": self._focus_id, "text": text}
+                self._speech_buf = []
+                self._speech_active = False
             self._last = amap
             return amap
         finally:
