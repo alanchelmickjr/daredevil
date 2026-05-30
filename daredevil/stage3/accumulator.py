@@ -75,14 +75,13 @@ class IdentityAccumulator:
         self._sources: Dict[int, SourceCentroid] = {}
         self._counter = 0
 
-    def ingest(self, embedding: Sequence[float], quality: float,
-               is_speech: bool = True) -> Optional[int]:
+    def ingest(self, embedding: Sequence[float], quality: float) -> Optional[int]:
         """Ingest a frame if it passes the quality gate. Returns source ID or None.
 
-        quality: [0, 1] — derived from energy and event classification.
-        is_speech: whether the event classifier says this is speech.
+        quality: [0, 1] — derived from energy (above VAD = non-zero).
+        The SPRT decides identity; the gate just rejects silence.
         """
-        if not is_speech or quality < self.min_quality:
+        if quality < self.min_quality:
             return None
 
         self._prune()

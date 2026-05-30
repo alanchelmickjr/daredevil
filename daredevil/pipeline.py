@@ -187,11 +187,11 @@ class Pipeline:
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
 
-            # Quality gate: only Speech frames with real energy feed the accumulator.
-            is_speech = ev.get("class", "").lower() in ("speech", "speech synthesizer",
-                                                         "narration", "conversation")
-            quality = min(1.0, energy / 0.05) if energy > 0.004 else 0.0
-            acc_id = self.accumulator.ingest(emb, quality, is_speech=is_speech)
+            # Quality gate: energy-only. The SPRT decides if the embedding matches —
+            # the gate's job is just to reject silence. PANNs event class is irrelevant
+            # here (it says "Music" when music is louder, but ECAPA still got your voice).
+            quality = min(1.0, energy / 0.05) if energy > self.config.thresholds.vad else 0.0
+            acc_id = self.accumulator.ingest(emb, quality)
 
             # Use the accumulated centroid for matching if available — it's more
             # stable than any single frame. Fall back to raw embedding otherwise.
