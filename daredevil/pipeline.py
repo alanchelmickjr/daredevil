@@ -196,17 +196,26 @@ class Pipeline:
             match = self.enrollment.match(emb, energy=energy, key="global")
 
             identity = None
+            identifying = None
             if self.enrollment.is_match(match):
                 identity = {"name": match["name"], "score": match["score"],
                             "enrollment_confidence": match["enrollment_confidence"]}
                 log.info(f"  {track_id} → MATCHED {match['name']} "
                          f"raw={match['raw']:.3f} llr={match['llr']:.2f} score={match['score']:.3f}")
+            elif match and match["llr"] > 0:
+                identifying = {"name": match["name"], "llr": match["llr"],
+                               "bound": self.enrollment._A,
+                               "progress": min(1.0, match["llr"] / self.enrollment._A)}
+                log.info(f"  {track_id} identifying {match['name']} "
+                         f"llr={match['llr']:.2f}/{self.enrollment._A:.2f} "
+                         f"({identifying['progress']*100:.0f}%)")
             else:
                 bl = match["llr"] if match else 0.0
                 log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} best_llr={bl:.2f}")
 
             t_status = self.tracker.status_of(track_id) or "confirmed"
-            records.append({"identity": identity, "unknown_id": track_id,
+            records.append({"identity": identity, "identifying": identifying,
+                            "unknown_id": track_id,
                             "event": ev, "prosody": pr, "position": pos,
                             "track_status": t_status})
 

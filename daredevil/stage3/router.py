@@ -98,6 +98,8 @@ class AttentionRouter:
             src["priority_override"] = override
         if r.get("track_status"):
             src["track_status"] = r["track_status"]
+        if r.get("identifying"):
+            src["identifying"] = r["identifying"]
         return src
 
 

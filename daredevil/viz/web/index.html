@@ -232,8 +232,16 @@ function render(map){
     c.querySelector('.who').textContent=(safety?'⚠ ':'')+s.id;
     c.querySelector('.pr').textContent='p='+Number(s.priority).toFixed(2);
     c.querySelector('.ft').textContent=s.event.class+' · '+s.prosody.state;
-    c.querySelector('.bar i').style.width=Math.round(s.priority*100)+'%';
-    c.querySelector('.gate').textContent=surfaced?'→ ROUTED TO LLM':'gated · ambient';
+    // Identity progress bar: show LLR building toward match
+    if(s.identifying){
+      c.querySelector('.bar i').style.width=Math.round(s.identifying.progress*100)+'%';
+      c.querySelector('.bar i').style.background='linear-gradient(90deg,var(--grn),#5ef0a0cc)';
+      c.querySelector('.gate').textContent='identifying '+s.identifying.name+'… '+Math.round(s.identifying.progress*100)+'%';
+    }else{
+      c.querySelector('.bar i').style.width=Math.round(s.priority*100)+'%';
+      c.querySelector('.bar i').style.background='';
+      c.querySelector('.gate').textContent=surfaced?'→ ROUTED TO LLM':'gated · ambient';
+    }
     waveDraw(c.querySelector('canvas'),FREQ[s.event.class]||4,col);
     // draw link line for non-enrolled active sources
     if(!enrolled){
