@@ -152,12 +152,33 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ## In progress (2026-05-30)
 
-1. **LLR progress bar on UNKNOWN cards** — When a voiceprint is enrolled, UNKNOWN
-   contacts that are being identified show a progress bar: the SPRT's LLR building
-   toward the Wald bound. "Identifying... 40%... 70%... ALAN." Real-time Name That
-   Tune feedback so the user sees the system working, not a sudden flip.
+1. **LLR progress bar on UNKNOWN cards** — ✅ DONE. When a voiceprint is enrolled,
+   UNKNOWN contacts show a green progress bar: SPRT LLR building toward the Wald
+   bound. "identifying alan… 47%". Flips to enrolled card on match.
 
-2. **Persist SPRT state across restarts** — Save the LLR accumulators to disk so a
+2. **Focus → Gemma conversation loop** — Click a source card on the HUD to set it
+   as the focus target. Only that source's audio gets transcribed (local STT) and
+   routed to the local LLM (Gemma via Ollama). The agent knows the full room
+   (awareness map) but converses with ONE person. Everyone else is heard, tracked,
+   gated out of the conversation.
+
+   ```mermaid
+   flowchart LR
+       CLICK["click card<br/>on HUD"] --> FOCUS["POST /focus<br/>{id: 'alan'}"]
+       FOCUS --> PIPE["pipeline marks<br/>focused source"]
+       PIPE --> GATE{"focused source<br/>speaking?"}
+       GATE -->|yes| STT["local STT<br/>(Whisper ONNX)"]
+       GATE -->|no| WAIT["wait / coast"]
+       STT --> CTX["transcript +<br/>awareness map +<br/>identity + prosody"]
+       CTX --> LLM["Gemma 4<br/>(Ollama, local)"]
+       LLM --> HUD["chat bubble<br/>on HUD"]
+   ```
+
+   - Only the focused source's audio is transcribed
+   - Everyone else is heard, tracked, in the awareness map — but gated out of the conversation
+   - The LLM receives: who's talking, what they said, who else is in the room, any safety alerts
+
+3. **Persist SPRT state across restarts** — Save the LLR accumulators to disk so a
    server restart doesn't mean cold start. Known voices re-lock in 1 frame instead
    of rebuilding from zero.
 
