@@ -237,7 +237,7 @@ class _State:
             result = subprocess.run(
                 ["llama-cli", "--model", model, "--prompt", prompt,
                  "--n-predict", "128", "--no-display-prompt", "--log-disable"],
-                capture_output=True, text=True, timeout=15)
+                capture_output=True, text=True, timeout=60)
             response = result.stdout.strip()
             if response:
                 log.info(f"gemma: \"{response[:80]}...\"")
