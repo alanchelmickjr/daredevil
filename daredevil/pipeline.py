@@ -189,51 +189,35 @@ class Pipeline:
             track_feat = self.spectral.feature(src.audio, src.sr) if self.spectral else emb
             track_id = self.tracker.assign(track_feat, position=pos, event_class=ev.get("class"))
 
-            # Identity: SPRT for initial acquisition, then carry-forward by
-            # nearest centroid (diart/pyannote pattern). Once matched, every
-            # subsequent speech frame is attributed if it's closest to that speaker.
-            from .audio.utils import is_speech_quality, cosine as _cos
+            # Identity: SPRT runs every speech frame. Centroid accumulates in
+            # parallel (diart pattern: centers += embedding). The SPRT decides,
+            # the centroid holds. Both grow along curves, never reset.
+            from .audio.utils import is_speech_quality
             match = None
             identity = None
             identifying = None
 
             if src.truth is not None or is_speech_quality(src.audio, src.sr):
-                # Carry-forward: if already decided, just check nearest centroid
-                decided_name = self._decided_speaker(emb)
-                if decided_name:
-                    rec = self.store.get(decided_name)
-                    if rec:
-                        raw = _cos(emb, rec["vector"])
-                        identity = {"name": decided_name, "score": 1.0,
-                                    "enrollment_confidence": rec.get("enrollment_confidence", 1.0)}
-                        log.info(f"  {track_id} → HOLD {decided_name} cos={raw:.3f}")
-                else:
-                    match = self.enrollment.match(emb, energy=energy, key="global")
+                match = self.enrollment.match(emb, energy=energy, key="global")
 
-            if match is None and identity is None:
-                if not (src.truth is not None or is_speech_quality(src.audio, src.sr)):
-                    log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
-                             f"[non-speech, skipped]")
-                elif identity is None and not identifying:
-                    log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
-                             f"[no match data]")
-            elif match is not None:
-                if self.enrollment.is_match(match):
-                    identity = {"name": match["name"], "score": match["score"],
-                                "enrollment_confidence": match["enrollment_confidence"]}
-                    self._mark_decided(match["name"])
-                    log.info(f"  {track_id} → MATCHED {match['name']} "
-                             f"raw={match['raw']:.3f} llr={match['llr']:.2f} score={match['score']:.3f}")
-                elif match["llr"] > 0:
-                    identifying = {"name": match["name"], "llr": match["llr"],
-                                   "bound": self.enrollment._A,
-                                   "progress": min(1.0, match["llr"] / self.enrollment._A)}
-                    log.info(f"  {track_id} identifying {match['name']} "
-                             f"llr={match['llr']:.2f}/{self.enrollment._A:.2f} "
-                             f"({identifying['progress']*100:.0f}%)")
-                else:
-                    log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
-                             f"cos={match['raw']:.3f} llr={match['llr']:.2f}")
+            if match is None:
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
+                         f"[non-speech, skipped]")
+            elif self.enrollment.is_match(match):
+                identity = {"name": match["name"], "score": match["score"],
+                            "enrollment_confidence": match["enrollment_confidence"]}
+                log.info(f"  {track_id} → MATCHED {match['name']} "
+                         f"raw={match['raw']:.3f} llr={match['llr']:.2f} score={match['score']:.3f}")
+            elif match["llr"] > 0:
+                identifying = {"name": match["name"], "llr": match["llr"],
+                               "bound": self.enrollment._A,
+                               "progress": min(1.0, match["llr"] / self.enrollment._A)}
+                log.info(f"  {track_id} identifying {match['name']} "
+                         f"llr={match['llr']:.2f}/{self.enrollment._A:.2f} "
+                         f"({identifying['progress']*100:.0f}%)")
+            else:
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
+                         f"cos={match['raw']:.3f} llr={match['llr']:.2f}")
 
             t_status = self.tracker.status_of(track_id) or "confirmed"
             records.append({"identity": identity, "identifying": identifying,
@@ -269,29 +253,6 @@ class Pipeline:
             # audio returned transiently for visualization only; never persisted.
             return amap, cap.mono, cap.sample_rate
         return amap
-
-    # ----------------------------------------------------------------- identity carry-forward
-    _decided: dict = {}  # {speaker_name: True} — speakers that have been SPRT-confirmed
-
-    def _decided_speaker(self, emb) -> str | None:
-        """If any decided speaker is the nearest centroid, return their name."""
-        if not self._decided:
-            return None
-        from .audio.utils import cosine as _cos
-        best_name, best_cos = None, -1.0
-        for name in self._decided:
-            rec = self.store.get(name)
-            if rec:
-                c = _cos(emb, rec["vector"])
-                if c > best_cos:
-                    best_cos, best_name = c, name
-        # Only carry forward if cosine is at least somewhat positive
-        if best_cos > 0.2:
-            return best_name
-        return None
-
-    def _mark_decided(self, name: str):
-        self._decided[name] = True
 
     # ----------------------------------------------------------------- helper
     def _run_slot(self, slot, audio, sr, ctx):
