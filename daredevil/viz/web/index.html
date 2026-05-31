@@ -196,7 +196,7 @@ function makeCard(s){
   const c=document.createElement('div');c.className='card';
   c.innerHTML='<div class="hd"><span class="who"></span><span class="pr"></span></div>'
     +'<canvas></canvas><div class="ft"></div><div class="bar"><i></i></div><div class="gate"></div>';
-  c.onclick=()=>setFocus(s.id);
+  c.onclick=()=>setFocus(s.id,s.identity&&s.identity.name);
   return c;}
 function render(map){
   const now=Date.now(),cx=innerWidth/2,cy=innerHeight/2;links.innerHTML='';
@@ -225,8 +225,10 @@ function render(map){
         known.appendChild(c);}
       c.className='card surface';
       c.style.opacity='';
-    } else if(coasting && s.id!==focusId && s.id!==map.focus){
+    } else if(coasting && s.id!==focusId && s.id!==map.focus
+              && !(s.identity && s.identity.name===focusId)){
       // coasting = lost contact, fade to sidebar — but never fade the focused source
+      // (matched by track ID, server focus, OR identity name)
       if(c.parentNode!==sidebar){c.remove();
         c.style.left='';c.style.top='';c.style.position='relative';
         c.style.transform='none';c.style.width='100%';
@@ -307,9 +309,10 @@ function probe(id){fetch('/probe?id='+encodeURIComponent(id)).then(r=>r.json())
   .then(d=>say(d.implemented===false ? ('<b>'+d.id+'</b><br>TODO: '+d.todo)
                                      : ('<b>'+d.id+' → LLM</b><br>'+d.transcript))).catch(()=>{});}
 let focusId=null;
-function setFocus(id){
-  if(focusId===id){focusId=null;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});say('focus cleared');}
-  else{focusId=id;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});say('<b>focused:</b> '+id+'<br>only this source talks to the LLM');}
+function setFocus(id,identityName){
+  const fid=identityName||id;
+  if(focusId===fid){focusId=null;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});say('focus cleared');}
+  else{focusId=fid;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:fid})});say('<b>focused:</b> '+fid+'<br>only this source talks to the LLM');}
 }
 core.onclick=()=>{if(focusId){setFocus(focusId);}else{say('click a source card to focus');}};
 function poll(){
