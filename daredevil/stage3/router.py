@@ -100,6 +100,8 @@ class AttentionRouter:
             src["track_status"] = r["track_status"]
         if r.get("identifying"):
             src["identifying"] = r["identifying"]
+        if "centroid_confidence" in r:
+            src["centroid_confidence"] = r["centroid_confidence"]
         return src
 
 

@@ -51,7 +51,8 @@ def _cmd_calibrate(args) -> int:
 
 
 def _cmd_devices(args) -> int:
-    print(json.dumps(Pipeline().devices(), indent=2))
+    pipe = Pipeline(warmup=True)
+    print(json.dumps(pipe.devices(), indent=2))
     return 0
 
 

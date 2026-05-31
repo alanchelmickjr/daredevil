@@ -158,14 +158,6 @@ class Pipeline:
                 per_source.append({n: f.result() for n, f in futs.items()})
         parallel_ms = (time.perf_counter() - t0) * 1000
 
-        # --- Stage 2: sequential pass (for the latency comparison only)
-        t1 = time.perf_counter()
-        for src in sources:
-            ctx = {"truth": src.truth}
-            for s in self.slots.values():
-                self._run_slot(s, src.audio, src.sr, ctx)
-        sequential_ms = (time.perf_counter() - t1) * 1000
-
         # --- assemble per-source records from the parallel results.
         # The identity accumulator collects good frames (Speech + energetic) into
         # per-source centroids that persist across tracker thrash. The SPRT runs
@@ -189,9 +181,12 @@ class Pipeline:
             # Centroid accumulates with each assignment — the curve grows, never resets.
             track_id = self.tracker.assign(emb, position=pos, event_class=ev.get("class"))
 
-            # Identity: SPRT runs every speech frame. Centroid accumulates in
-            # parallel (diart pattern: centers += embedding). The SPRT decides,
-            # the centroid holds. Both grow along curves, never reset.
+            # Feed identity accumulator — builds centroid confidence over time.
+            frame_quality = min(1.0, energy / 0.05) if energy > self.config.thresholds.vad else 0.0
+            acc_id = self.accumulator.ingest(emb, frame_quality)
+            acc_src = self.accumulator.get_source(acc_id) if acc_id else None
+            centroid_confidence = acc_src.confidence() if acc_src else 0.0
+
             from .audio.utils import is_speech_quality
             match = None
             identity = None
@@ -223,7 +218,8 @@ class Pipeline:
             records.append({"identity": identity, "identifying": identifying,
                             "unknown_id": track_id,
                             "event": ev, "prosody": pr, "position": pos,
-                            "track_status": t_status})
+                            "track_status": t_status,
+                            "centroid_confidence": round(centroid_confidence, 3)})
 
         # Include coasting tracks that weren't seen this frame — they persist
         # on the radar until they age out. Status tells the HUD what to do:
@@ -239,13 +235,14 @@ class Pipeline:
                     "position": {"azimuth": t.get("azimuth"), "elevation": 0.0}
                     if t.get("azimuth") is not None else None,
                     "track_status": t["status"],
+                    "centroid_confidence": 0.0,
                 })
 
         # Forget SPRT accumulators for contacts that have aged out.
         self.enrollment.retain(self.tracker.live_ids())
 
         timing = {"parallel_ms": round(parallel_ms, 1),
-                  "sequential_ms": round(sequential_ms, 1)}
+                  "sequential_ms": 0}
 
         amap = self.router.build(records, datetime.now().isoformat(), timing,
                                  cap.array, self.config.resolved_backend())

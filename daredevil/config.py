@@ -105,6 +105,7 @@ class Thresholds:
     vad: float = 0.004             # energy gate for "is anyone speaking"
     enroll_tau: float = 3.0        # tau_enroll — enrollment confidence time constant (s)
     surface: float = 0.45          # priority at/above which a source is routed to the LLM
+    display: float = 0.5            # centroid confidence below which a source is hidden from HUD
 
 
 @dataclass

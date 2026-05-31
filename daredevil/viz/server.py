@@ -205,6 +205,9 @@ class _State:
         self._last = None
         self._busy = False
         self._focus_id = None
+        self._transcript = None
+        self._llm_response = None
+        self._stt_thread = None
         from .transcriber import Transcriber
         self.transcriber = Transcriber()
         self.cal = _CalibrationSession(self)
@@ -246,8 +249,20 @@ class _State:
             log.warning(f"gemma failed: {e}")
             return ""
 
+    def _bg_transcribe(self, audio, sr, amap: dict):
+        """Background: flush STT then call Gemma. Never blocks detection."""
+        try:
+            results = self.transcriber.check_pauses()
+            if results:
+                transcript_text = results[0][1]
+                self._transcript = {"source": results[0][0], "text": transcript_text}
+                response = self._ask_gemma(transcript_text, amap)
+                if response:
+                    self._llm_response = response
+        except Exception as e:
+            log.warning(f"bg_transcribe: {e}")
+
     def awareness(self) -> dict:
-        # During calibration, the mic is exclusively owned by the cal thread.
         if self.cal.status["active"] or self._busy:
             if self._last is not None:
                 return self._last
@@ -265,27 +280,31 @@ class _State:
                 "sources": len(self.pipe.accumulator.sources),
                 "top_llr": self.pipe.enrollment.top_llr(),
             }
+
+            # Surface any previously-completed STT/LLM results.
+            if self._transcript:
+                amap["transcript"] = self._transcript
+                self._transcript = None
+            if self._llm_response:
+                amap["llm_response"] = self._llm_response
+                self._llm_response = None
+
             self._last = amap
 
-            # TRANSCRIPTION — independent consumer. If it fails, detection already succeeded.
+            # TRANSCRIPTION — feed audio, flush in background thread.
             try:
                 if self._focus_id and audio:
                     from ..audio.utils import rms as _rms_check
                     energy = _rms_check(audio)
-                    # Transcribe any speech when focus is set — don't wait for identity
                     is_speaking = energy > self.pipe.config.thresholds.vad * 3
                     self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
-                    results = self.transcriber.check_pauses()
-                    if results:
-                        transcript_text = results[0][1]
-                        amap["transcript"] = {"source": results[0][0], "text": transcript_text}
-                        response = self._ask_gemma(transcript_text, amap)
-                        if response:
-                            amap["llm_response"] = response
-                elif self.transcriber.has_text():
-                    amap["transcript"] = self.transcriber.latest()
+                    if self._stt_thread is None or not self._stt_thread.is_alive():
+                        self._stt_thread = threading.Thread(
+                            target=self._bg_transcribe, args=(audio, sr, amap),
+                            daemon=True)
+                        self._stt_thread.start()
             except Exception as e:
-                log.warning(f"transcription error: {e}")  # never breaks detection
+                log.warning(f"transcription error: {e}")
 
             return amap
         finally:
