@@ -226,79 +226,19 @@ def _pick_input_device():
     return None, 48000
 
 
-class MicStream:
-    """Persistent mic stream — stays open, no flashing. diart/pyannote pattern.
-
-    The callback pushes chunks into a queue. read(seconds) pulls from the queue.
-    Mic opens once on first read and stays open until close().
-    """
-
-    _instance = None
-
-    @classmethod
-    def get(cls) -> "MicStream":
-        if cls._instance is None or not cls._instance._open:
-            cls._instance = cls()
-        return cls._instance
-
-    def __init__(self):
-        import sounddevice as sd
-        from queue import SimpleQueue
-        self._queue: "SimpleQueue" = SimpleQueue()
-        dev_idx, native_sr = _pick_input_device()
-        self.sr = native_sr
-        self._stream = sd.InputStream(
-            channels=1,
-            samplerate=self.sr,
-            blocksize=int(0.1 * self.sr),
-            device=dev_idx,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
-        self._open = True
-
-    def _callback(self, indata, frames, time_info, status):
-        self._queue.put_nowait(indata[:, 0].copy())
-
-    def read(self, seconds: float) -> List[float]:
-        import time
-        n_samples = int(seconds * self.sr)
-        buf: List[float] = []
-        deadline = time.monotonic() + seconds + 0.5
-        while len(buf) < n_samples and time.monotonic() < deadline:
-            try:
-                chunk = self._queue.get(timeout=0.2)
-                buf.extend(chunk.tolist())
-            except Exception:
-                pass
-        return buf[:n_samples]
-
-    def close(self):
-        if self._open:
-            self._stream.stop()
-            self._stream.close()
-            self._open = False
-
-
 def capture_live(seconds: float = 1.0, sr: int = 48000,
                  array: Optional[MicArray] = None) -> CaptureResult:
-    """Record from the persistent mic stream (always open, no flashing)."""
+    """Record from the best available input device via sounddevice (PortAudio, MIT)."""
+    import sounddevice as sd
     arr = array or detect_array()
-    try:
-        mic = MicStream.get()
-        samples = mic.read(seconds)
-        return CaptureResult(channels=[samples], sample_rate=mic.sr, array=arr, source="live")
-    except Exception:
-        import sounddevice as sd
-        nch = max(1, arr.n_mics)
-        dev_idx, native_sr = _pick_input_device()
-        use_sr = native_sr if native_sr >= 44100 else sr
-        rec = sd.rec(int(seconds * use_sr), samplerate=use_sr, channels=nch,
-                     device=dev_idx, dtype="float32")
-        sd.wait()
-        channels = [rec[:, c].tolist() for c in range(nch)]
-        return CaptureResult(channels=channels, sample_rate=use_sr, array=arr, source="live")
+    nch = max(1, arr.n_mics)
+    dev_idx, native_sr = _pick_input_device()
+    use_sr = native_sr if native_sr >= 44100 else sr
+    rec = sd.rec(int(seconds * use_sr), samplerate=use_sr, channels=nch,
+                 device=dev_idx, dtype="float32")
+    sd.wait()
+    channels = [rec[:, c].tolist() for c in range(nch)]
+    return CaptureResult(channels=channels, sample_rate=use_sr, array=arr, source="live")
 
 
 def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",
