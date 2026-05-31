@@ -243,9 +243,14 @@ class _State:
             try:
                 if self._focus_id and audio:
                     from .audio.utils import rms as _rms_check
-                    is_speaking = any(
-                        s["id"] == self._focus_id for s in amap.get("sources", [])
-                    ) and _rms_check(audio) > self.pipe.config.thresholds.vad * 3
+                    # Match focus by source ID OR enrolled identity name
+                    is_focused_source = any(
+                        s["id"] == self._focus_id or
+                        (s.get("identity") and s["identity"].get("name") == self._focus_id)
+                        for s in amap.get("sources", [])
+                    )
+                    energy = _rms_check(audio)
+                    is_speaking = is_focused_source and energy > self.pipe.config.thresholds.vad * 3
                     self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
                     results = self.transcriber.check_pauses()
                     if results:
