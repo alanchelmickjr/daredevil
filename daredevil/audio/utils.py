@@ -94,6 +94,31 @@ def spectral_centroid(signal: Sequence[float], sr: int) -> float:
     return sum(f * m for f, m in zip(freqs, mags)) / total
 
 
+def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
+    """Fast speech-quality gate. Pure stdlib, ~0.1ms. Rejects silence, clicks, noise.
+
+    Speech has: high energy, low zero-crossing rate (~50-150Hz), and more
+    low-band than high-band energy (spectral tilt ~-6dB/octave).
+    Non-speech frames are non-evidence — they shouldn't vote in the SPRT.
+    """
+    n = len(audio)
+    if n < 100:
+        return False
+    energy = (sum(x * x for x in audio) / n) ** 0.5
+    if energy < 0.01:
+        return False
+    zcr = sum(1 for i in range(1, n) if audio[i - 1] * audio[i] < 0)
+    zcr_rate = zcr * sr / n
+    if zcr_rate > 3000:
+        return False
+    split = max(1, n * 1000 // sr)
+    low_e = sum(x * x for x in audio[:split]) + 1e-10
+    high_e = sum(x * x for x in audio[split:]) + 1e-10
+    if low_e / high_e < 1.5:
+        return False
+    return True
+
+
 def fingerprint(signal: Sequence[float], sr: int, dim: int = 192) -> List[float]:
     """A cheap, deterministic spectral fingerprint, L2-normalised to `dim`.
 

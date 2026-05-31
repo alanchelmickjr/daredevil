@@ -190,19 +190,24 @@ class Pipeline:
             track_id = self.tracker.assign(track_feat, position=pos, event_class=ev.get("class"))
 
             # Identity: one SPRT per enrolled speaker, keyed by speaker name alone.
-            # Every frame above VAD gets scored. No track ID, no source ID — just
-            # "does this embedding sound like alan?" Evidence accumulates across all
-            # frames regardless of tracker thrash. The $2 chip approach.
-            match = self.enrollment.match(emb, energy=energy, key="global")
+            # Only speech-quality frames vote. Non-speech (keyboard, traffic, music)
+            # is non-evidence — skipping it is the mathematically correct thing to do.
+            from .audio.utils import is_speech_quality
+            match = None
+            if src.truth is not None or is_speech_quality(src.audio, src.sr):
+                match = self.enrollment.match(emb, energy=energy, key="global")
 
             identity = None
             identifying = None
-            if self.enrollment.is_match(match):
+            if match is None:
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
+                         f"[non-speech, skipped]")
+            elif self.enrollment.is_match(match):
                 identity = {"name": match["name"], "score": match["score"],
                             "enrollment_confidence": match["enrollment_confidence"]}
                 log.info(f"  {track_id} → MATCHED {match['name']} "
                          f"raw={match['raw']:.3f} llr={match['llr']:.2f} score={match['score']:.3f}")
-            elif match and match["llr"] > 0:
+            elif match["llr"] > 0:
                 identifying = {"name": match["name"], "llr": match["llr"],
                                "bound": self.enrollment._A,
                                "progress": min(1.0, match["llr"] / self.enrollment._A)}
@@ -210,10 +215,8 @@ class Pipeline:
                          f"llr={match['llr']:.2f}/{self.enrollment._A:.2f} "
                          f"({identifying['progress']*100:.0f}%)")
             else:
-                bl = match["llr"] if match else 0.0
-                raw = match["raw"] if match else 0.0
                 log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
-                         f"cos={raw:.3f} llr={bl:.2f}")
+                         f"cos={match['raw']:.3f} llr={match['llr']:.2f}")
 
             t_status = self.tracker.status_of(track_id) or "confirmed"
             records.append({"identity": identity, "identifying": identifying,
