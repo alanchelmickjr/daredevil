@@ -328,8 +328,10 @@ def _make_handler(state: _State):
                 sid = params.get("id")
                 if sid:
                     state.set_focus(sid)
+                    log.info(f"FOCUS SET: {sid}")
                 else:
                     state.clear_focus()
+                    log.info("FOCUS CLEARED")
                 return self._send(200, json.dumps({"ok": True, "focus": state._focus_id}))
             return self._send(404, json.dumps({"error": "not found"}))
 
