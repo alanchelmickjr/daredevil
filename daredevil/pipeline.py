@@ -185,9 +185,9 @@ class Pipeline:
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
 
-            # Tracker for spatial continuity / display.
-            track_feat = self.spectral.feature(src.audio, src.sr) if self.spectral else emb
-            track_id = self.tracker.assign(track_feat, position=pos, event_class=ev.get("class"))
+            # Tracker uses the ECAPA embedding directly for association (diart pattern).
+            # Centroid accumulates with each assignment — the curve grows, never resets.
+            track_id = self.tracker.assign(emb, position=pos, event_class=ev.get("class"))
 
             # Identity: SPRT runs every speech frame. Centroid accumulates in
             # parallel (diart pattern: centers += embedding). The SPRT decides,

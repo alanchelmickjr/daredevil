@@ -74,9 +74,10 @@ class UnknownTracker:
 
     # ------------------------------------------------------------- internals
     def _update(self, t: dict, vector, az, event_class, now) -> None:
-        e = self.p.embedding_ema
+        # Accumulate centroid (diart pattern: centers += embedding).
+        # Normalize at comparison time, not here — the sum grows with confidence.
         m = min(len(t["vector"]), len(vector))
-        t["vector"] = [(1.0 - e) * t["vector"][i] + e * vector[i] for i in range(m)]
+        t["vector"] = [t["vector"][i] + vector[i] for i in range(m)]
         if az is not None:
             if t.get("azimuth") is None:
                 t["azimuth"], t["az_rate"] = az, 0.0
