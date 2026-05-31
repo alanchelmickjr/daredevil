@@ -1,6 +1,6 @@
 # Daredevil — Handoff & CLI Reference
 
-**As of commit `db1d8f0` · branch `main` · 2026-05-29**
+**As of commit `da34e76` · branch `main` · 2026-05-30**
 
 Read `CLAUDE.md` first (goals + guardrails). This doc is the point-in-time
 snapshot: how to run everything, what's real vs. stubbed, and what's next.
@@ -56,7 +56,18 @@ python -m daredevil serve --live  # live HUD with real mic + ML backends
 
 ---
 
-## What's real (verified working on MacBook Air M2, 2026-05-28)
+## Platform status
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **MacBook (Apple Silicon)** | **Alpha — ready for testing** | MPS acceleration, all backends, verified live |
+| **Jetson / Orin** | In progress | CUDA + TensorRT path, needs ONNX export |
+| **Android** | Planned | ONNX Runtime Mobile + NNAPI EP |
+| **Windows** | Planned | ONNX Runtime + DirectML EP |
+| **Linux (x86)** | Planned | ONNX Runtime CPU/CUDA |
+| **Raspberry Pi** | Planned | Fallback-only or ONNX int8 |
+
+## What's real (verified working on MacBook Air M2, 2026-05-30)
 
 - **ECAPA-TDNN speaker embedding** — SpeechBrain, 192-dim, running on MPS (Apple Metal GPU). Proper audio normalization + embedding normalization per SpeechBrain docs. Match score 0.78+ on same-speaker.
 - **PANNs CNN14 event classification** — 527 AudioSet classes, 32kHz resampling, running on CPU. Correctly identifies Speech, Music, Whistling, Vehicle, Animal, etc.
@@ -68,7 +79,7 @@ python -m daredevil serve --live  # live HUD with real mic + ML backends
 - **Web HUD** — Neumorphic-steampunk orbital display. Known speakers on left column (3x linger), unknown active on radar, stale fading to right column (capacity-based eviction). Crash-resistant (handles refresh mid-inference).
 - **MCP server** — 4 tools (listen, awareness, enroll_speaker, devices). Stdio transport. Configured for Claude Code in `.claude/settings.local.json`.
 - **Pipeline logging** — Capture RMS, separation streams, tracker decisions, LLR state. Logs to stdout (redirect to file with `> /tmp/daredevil.log 2>&1`).
-- **Full test suite** — 9 tests passing with all real backends loaded.
+- **Full test suite** — 25 tests passing with all real backends loaded.
 - **Privacy** — No cloud, no raw audio stored, non-reversible embeddings only. COPPA compliant.
 
 ---
@@ -184,27 +195,25 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ## Known issues / next work (prioritized)
 
-1. **Quality-gated identity accumulator (THE BLOCKER)** — The tracker spawns new
-   contacts frame-to-frame instead of collecting good embeddings into one identity.
-   Fix: decouple identity accumulation from the tracker's frame-to-frame association.
-   Collect *only* high-quality frames (Speech-classified, high energy, above VAD) into
-   a per-source centroid that persists across tracker thrash. Match against enrolled DB
-   progressively — confidence grows as good chunks coalesce, doesn't require continuous
-   signal. This is how Shazam, Content ID, pyannote, and every production system works:
-   quality gate → per-source accumulator → progressive match → decay.
-   The SPRT math is correct; it's being starved of evidence because the tracker resets it.
+1. **Persist SPRT state across restarts** — Cold start takes several seconds to
+   re-lock identity. Save LLR accumulators to disk so known voices lock in 1 frame
+   after a server restart.
 
-2. **Calibration + enrollment UX in the web HUD** — Move the calibrate flow out of CLI
-   into the neumorphic HUD. 20s enrollment with guided prompts ("SPEAK" / "SHUT UP" /
-   "THE WORLD"), real-time level feedback, d-prime readiness display, and a countdown
-   so the user knows when recording starts. The CLI version works but the timing is
-   invisible — user can't tell when to talk.
+2. **Wire Gemma conversation response** — Transcript goes to llama-cli (Gemma 3 4B,
+   Metal-accelerated, already installed). Response streams back to HUD as chat bubble.
+   The awareness map provides context (who else is in the room, any alerts).
 
-3. **Feed-forward attention filter** — The gate should feed state back to the beginning
+3. **Speech gate calibration** — The 0.05 energy threshold is a hardcoded literal.
+   Should be derived from calibration data (measured background energy) and stored
+   as a named config tunable. Per WebRTC/Silero: use normalized energy + hysteresis.
+
+4. **Feed-forward attention filter** — The gate should feed state back to the beginning
    of the next loop. Ambient sources get lightweight checks instead of full processing.
    Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
 
-4. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
+5. **Streaming async pipeline (the loom)** — Replace batch capture-process-return with
+   a ring buffer + concurrent stream processing. Multiple sounds separated and tracked
+   in parallel. The mermaid in README shows the target architecture.
 
 5. **Live wake word** — openWakeWord ("Hey Radar") to steer focus.
 
