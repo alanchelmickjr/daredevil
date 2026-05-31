@@ -298,10 +298,14 @@ function render(map){
     c.style.opacity=String(0.15+0.6*(i/Math.max(1,arr.length-1)));});
   activeIds=currentIds;
   if(map.wake_word)wake.textContent='🎙 '+map.wake_word;
-  // Captions
+  // Captions + LLM response
   const cap=document.getElementById('caption');
   if(map.transcript&&map.transcript.text){
-    cap.innerHTML='<div class="src">'+map.transcript.source+'</div>'+map.transcript.text;
+    let html='<div class="src">'+map.transcript.source+'</div>'+map.transcript.text;
+    if(map.llm_response){
+      html+='<div style="margin-top:8px;color:var(--grn);font-style:italic">'+map.llm_response+'</div>';
+    }
+    cap.innerHTML=html;
     cap.classList.add('active');
   }else if(!map.focus){cap.classList.remove('active');}
 }

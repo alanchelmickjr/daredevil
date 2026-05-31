@@ -218,6 +218,34 @@ class _State:
         self.pipe.config.focus = None
         self._focus_id = None
 
+    def _ask_gemma(self, transcript: str, amap: dict) -> str:
+        """Send transcript + awareness context to Gemma via llama-cli. Local only."""
+        import subprocess
+        model = str(Path.home() / ".daredevil/models/gemma/gemma-3-4b-it-q4_k_m.gguf")
+        if not Path(model).exists():
+            log.warning("gemma model not found")
+            return ""
+        sources_summary = ", ".join(
+            f"{s['id']}({s['event']['class']})" for s in amap.get("sources", [])[:5])
+        prompt = (
+            f"You are Radar, a local AI assistant with acoustic awareness. "
+            f"You can hear the room. Current sources: [{sources_summary}]. "
+            f"The focused speaker ({self._focus_id}) just said: \"{transcript}\"\n"
+            f"Respond briefly and helpfully."
+        )
+        try:
+            result = subprocess.run(
+                ["llama-cli", "--model", model, "--prompt", prompt,
+                 "--n-predict", "128", "--no-display-prompt", "--log-disable"],
+                capture_output=True, text=True, timeout=15)
+            response = result.stdout.strip()
+            if response:
+                log.info(f"gemma: \"{response[:80]}...\"")
+            return response
+        except Exception as e:
+            log.warning(f"gemma failed: {e}")
+            return ""
+
     def awareness(self) -> dict:
         # During calibration, the mic is exclusively owned by the cal thread.
         if self.cal.status["active"] or self._busy:
@@ -257,7 +285,12 @@ class _State:
                     self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
                     results = self.transcriber.check_pauses()
                     if results:
-                        amap["transcript"] = {"source": results[0][0], "text": results[0][1]}
+                        transcript_text = results[0][1]
+                        amap["transcript"] = {"source": results[0][0], "text": transcript_text}
+                        # Send to Gemma via llama-cli for a response
+                        response = self._ask_gemma(transcript_text, amap)
+                        if response:
+                            amap["llm_response"] = response
                 elif self.transcriber.has_text():
                     amap["transcript"] = self.transcriber.latest()
             except Exception:
