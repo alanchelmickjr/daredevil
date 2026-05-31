@@ -15,9 +15,18 @@
 
 </div>
 
-> **Status: pre-alpha → alpha.** Identity matching works. The system detects WHO is speaking in a noisy room (conference calls, music, traffic), locks identity via SPRT accumulation, tracks contacts across frames, and transcribes the focused speaker locally via whisper.cpp. The web HUD shows it all in real time. Not yet packaged for general use — star/watch for the release, or read on to contribute.
+> **Alpha — [MacBook demo ready](#quick-start-macos).**  Identity matching works in noisy rooms. Click a source, get live captions. All local, no cloud.
 
+### Quick start (macOS)
 
+```bash
+git clone https://github.com/alanchelmickjr/daredevil && cd daredevil
+brew install miniforge && conda env create -f environment.yml && conda activate daredevil
+pip install -e . && brew install whisper-cpp llama-cpp
+python -m daredevil serve --live    # → http://127.0.0.1:8770
+```
+
+Other platforms (Jetson, Android, Windows, Linux) — in progress. See [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ---
 
