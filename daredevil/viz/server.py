@@ -204,7 +204,12 @@ class _State:
         self.pipe.warmup()
         self._last = None
         self._busy = False
-        self._focus_id = None
+        # Auto-focus the first enrolled speaker so identity + transcription
+        # work immediately after restart without re-clicking.
+        enrolled = self.pipe.enrollment.names()
+        self._focus_id = enrolled[0] if enrolled else None
+        if self._focus_id:
+            self.pipe.config.focus = self._focus_id
         from .transcriber import Transcriber
         self.transcriber = Transcriber()
         self.cal = _CalibrationSession(self)
@@ -270,7 +275,7 @@ class _State:
             # TRANSCRIPTION — independent consumer. If it fails, detection already succeeded.
             try:
                 if self._focus_id and audio:
-                    from .audio.utils import rms as _rms_check
+                    from ..audio.utils import rms as _rms_check
                     # Match focus by source ID OR enrolled identity name
                     is_focused_source = any(
                         s["id"] == self._focus_id or
@@ -293,8 +298,8 @@ class _State:
                             amap["llm_response"] = response
                 elif self.transcriber.has_text():
                     amap["transcript"] = self.transcriber.latest()
-            except Exception:
-                pass  # transcription failure never breaks detection
+            except Exception as e:
+                log.warning(f"transcription error: {e}")  # never breaks detection
 
             return amap
         finally:
