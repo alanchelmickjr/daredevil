@@ -251,6 +251,9 @@ class _State:
                     )
                     energy = _rms_check(audio)
                     is_speaking = is_focused_source and energy > self.pipe.config.thresholds.vad * 3
+                    log.info(f"  transcriber: focus={self._focus_id} found={is_focused_source} "
+                             f"energy={energy:.4f} speaking={is_speaking} "
+                             f"buf={len(self.transcriber._buffers.get(self._focus_id, []))}")
                     self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
                     results = self.transcriber.check_pauses()
                     if results:

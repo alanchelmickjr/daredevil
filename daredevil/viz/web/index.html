@@ -272,8 +272,10 @@ function render(map){
       links.appendChild(ln);}
   });
   // move stale cards to sidebar — known speakers linger 3x longer
+  // NEVER move the focused source — it stays pinned until manually cleared.
   Object.keys(cards).forEach(id=>{
     if(currentIds.has(id))return;
+    if(id===focusId||id===map.focus)return;
     const c=cards[id];
     const isKnown=c.parentNode===known;
     const age=now-(seen[id]||0);
