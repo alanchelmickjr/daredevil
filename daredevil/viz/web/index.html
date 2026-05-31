@@ -152,6 +152,12 @@ svg.links{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-eve
     <div class="cal-progress"><div class="cal-progress-fill" id="calProgress"></div></div>
     <div class="cal-stats" id="calStats"></div>
     <div class="cal-result" id="calResult"></div>
+    <div class="cal-name" style="margin-bottom:14px;text-align:center">
+      <input type="text" id="calName" placeholder="name (e.g. alan, jeff)" value=""
+        style="background:var(--panel);border:1px solid var(--brass);border-radius:8px;
+        padding:8px 14px;color:var(--ink);font-size:14px;width:200px;text-align:center;
+        box-shadow:inset 2px 2px 5px var(--sd),inset -2px -2px 5px var(--sl)"/>
+    </div>
     <div class="cal-actions">
       <button class="cal-btn" id="calStart">START</button>
       <button class="cal-btn" id="calNext" style="display:none">NEXT PHASE</button>
@@ -347,7 +353,7 @@ calDone.onclick=closeCal;
 
 calStart.onclick=()=>{
   fetch('/calibrate/start',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:'alan',seconds:20,others:true})})
+    body:JSON.stringify({name:document.getElementById('calName').value.trim()||'you',seconds:20,others:true})})
   .then(()=>{
     calStart.style.display='none';calNext.style.display='';
     calPrompt.textContent='Ready. Hit NEXT PHASE when you\'re set to talk.';
