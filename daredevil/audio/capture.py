@@ -203,16 +203,112 @@ def capture_file(path: str, sr_hint: Optional[int] = None) -> CaptureResult:
                          array=detect_array(channels=nch), source=str(p))
 
 
+def _pick_input_device():
+    """Find the first input device that actually delivers audio.
+
+    AirPods and some Bluetooth devices show up as the default input but return
+    zeros when not in a call/voice profile.  Fall back to a device that has a
+    native sample rate >= 44.1 kHz (rules out dead BT SCO endpoints).
+    """
+    import sounddevice as sd
+    default_idx = sd.default.device[0]
+    devs = sd.query_devices()
+    default = devs[default_idx] if default_idx is not None else None
+    if default and default["max_input_channels"] > 0 and default["default_samplerate"] >= 44100:
+        return default_idx, int(default["default_samplerate"])
+    # Default looks suspect (e.g. BT at 24kHz) — find the built-in mic.
+    for i, d in enumerate(devs):
+        if d["max_input_channels"] > 0 and d["default_samplerate"] >= 44100:
+            return i, int(d["default_samplerate"])
+    # Last resort: use whatever the OS says, at its native rate.
+    if default and default["max_input_channels"] > 0:
+        return default_idx, int(default["default_samplerate"])
+    return None, 48000
+
+
+class MicStream:
+    """Persistent mic stream — always open, callback pushes into a queue.
+
+    The key insight from diart: the stream stays open permanently. The consumer
+    (capture_live) reads the most recent 1s from the queue on each call.
+    Old chunks beyond the requested window are discarded — this prevents lag
+    without throwing away current speech.
+    """
+
+    _instance = None
+
+    @classmethod
+    def get(cls) -> "MicStream":
+        if cls._instance is None or not cls._instance._open:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        import sounddevice as sd
+        from collections import deque
+        import threading
+        dev_idx, native_sr = _pick_input_device()
+        self.sr = native_sr
+        block_samples = int(0.1 * self.sr)  # 100ms blocks
+        # Ring buffer: hold last 2s of audio (20 blocks of 100ms)
+        self._ring: "deque" = deque(maxlen=20)
+        self._lock = threading.Lock()
+        self._stream = sd.InputStream(
+            channels=1,
+            samplerate=self.sr,
+            blocksize=block_samples,
+            device=dev_idx,
+            dtype="float32",
+            callback=self._callback,
+        )
+        self._stream.start()
+        self._open = True
+
+    def _callback(self, indata, frames, time_info, status):
+        with self._lock:
+            self._ring.append(indata[:, 0].copy())
+
+    def read_latest(self, seconds: float) -> List[float]:
+        """Return the most recent `seconds` of audio. No lag — always current."""
+        n_blocks = int(seconds / 0.1)
+        with self._lock:
+            blocks = list(self._ring)
+        # Take the most recent n_blocks
+        recent = blocks[-n_blocks:] if len(blocks) >= n_blocks else blocks
+        if not recent:
+            return [0.0] * int(seconds * self.sr)
+        import itertools
+        return list(itertools.chain.from_iterable(b.tolist() for b in recent))
+
+    def close(self):
+        if self._open:
+            self._stream.stop()
+            self._stream.close()
+            self._open = False
+
+    @property
+    def is_open(self):
+        return self._open
+
+
 def capture_live(seconds: float = 1.0, sr: int = 48000,
                  array: Optional[MicArray] = None) -> CaptureResult:
-    """Record from the default input device via sounddevice (PortAudio, MIT)."""
-    import sounddevice as sd  # raises if unavailable -> caller falls back
+    """Read the most recent audio from the persistent mic stream."""
     arr = array or detect_array()
-    nch = max(1, arr.n_mics)
-    rec = sd.rec(int(seconds * sr), samplerate=sr, channels=nch, dtype="float32")
-    sd.wait()
-    channels = [rec[:, c].tolist() for c in range(nch)]
-    return CaptureResult(channels=channels, sample_rate=sr, array=arr, source="live")
+    try:
+        mic = MicStream.get()
+        samples = mic.read_latest(seconds)
+        return CaptureResult(channels=[samples], sample_rate=mic.sr, array=arr, source="live")
+    except Exception:
+        import sounddevice as sd
+        nch = max(1, arr.n_mics)
+        dev_idx, native_sr = _pick_input_device()
+        use_sr = native_sr if native_sr >= 44100 else sr
+        rec = sd.rec(int(seconds * use_sr), samplerate=use_sr, channels=nch,
+                     device=dev_idx, dtype="float32")
+        sd.wait()
+        channels = [rec[:, c].tolist() for c in range(nch)]
+        return CaptureResult(channels=channels, sample_rate=use_sr, array=arr, source="live")
 
 
 def capture(seconds: float = 1.0, sr: int = 48000, source: str = "auto",

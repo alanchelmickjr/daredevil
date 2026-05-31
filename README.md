@@ -11,9 +11,22 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Runs anywhere](https://img.shields.io/badge/runs-anywhere%20(no%20GPU%20needed)-brightgreen.svg)](#runs-everywhere)
 [![On-device](https://img.shields.io/badge/inference-100%25%20on--device-blueviolet.svg)](#privacy-is-the-point)
-[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#roadmap)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 
 </div>
+
+> **Alpha — [MacBook demo ready](#quick-start-macos).**  Identity matching works in noisy rooms. Click a source, get live captions. All local, no cloud.
+
+### Quick start (macOS)
+
+```bash
+git clone https://github.com/alanchelmickjr/daredevil && cd daredevil
+brew install miniforge && conda env create -f environment.yml && conda activate daredevil
+pip install -e . && brew install whisper-cpp llama-cpp
+python -m daredevil serve --live    # → http://127.0.0.1:8770
+```
+
+Other platforms (Jetson, Android, Windows, Linux) — in progress. See [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ---
 
@@ -160,29 +173,51 @@ That's how an LLM gets *"Alan is speaking"* inserted perfectly into its context 
 Three stages. The middle stage runs every model **in parallel**, so latency is the *slowest* slot, not the *sum* of all slots.
 
 ```mermaid
-flowchart LR
-    MIC["🎙️ Mic array<br/>(laptop / USB / 3D module)<br/><i>any geometry</i>"] --> S1
+flowchart TB
+    MIC["🎙️ 48kHz continuous stream<br/>(laptop / USB / 3D module)"] --> INGEST
 
-    subgraph S1 ["STAGE 1 · Spatial (continuous)"]
-        DOA["SRP-PHAT DOA<br/>beamforming / separation<br/><i>geometry-agnostic</i>"]
+    subgraph INGEST ["INGEST · async ring buffer"]
+        direction LR
+        BUF["ring buffer<br/>48kHz × N channels"]
+        BUF --> GATE["energy gate<br/>(VAD)"]
+        GATE --> WINDOW["windowed chunks<br/>→ up to 300 concurrent streams"]
     end
 
-    S1 --> A & B & C & D
+    WINDOW --> S1 & S2
 
-    subgraph S2 ["STAGE 2 · Parallel inference bank"]
-        A["Slot A · WHO<br/>ECAPA-TDNN<br/>192-dim voiceprint"]
-        B["Slot B · WHAT<br/>PANNs / YAMNet<br/>event + safety flags"]
-        C["Slot C · HOW<br/>prosody<br/>F0·jitter·shimmer·HNR"]
-        D["Slot D · user<br/>(pluggable)"]
+    subgraph S1 ["STAGE 1 · Spatial (per-stream)"]
+        DOA["DOA + separation<br/>geometry-agnostic"]
     end
 
-    A & B & C & D --> S3
+    subgraph S2 ["STAGE 2 · Parallel slots (async per-stream)"]
+        direction LR
+        A["WHO<br/>ECAPA 192-dim"]
+        B["WHAT<br/>PANNs 527-class"]
+        C["HOW<br/>prosody"]
+        D["Slot D<br/>pluggable"]
+    end
+
+    S1 --> TRACK
+    S2 --> ACC
+
+    subgraph ACC ["ACCUMULATOR · per enrolled speaker"]
+        direction LR
+        CENT["centroid<br/>EMA from good frames"]
+        SPRT["SPRT<br/>log-likelihood<br/>→ identity lock"]
+    end
+
+    subgraph TRACK ["TRACKER · spatial continuity"]
+        NMF["NMF spectral basis<br/>→ track ID"]
+    end
+
+    ACC --> S3
+    TRACK --> S3
 
     subgraph S3 ["STAGE 3 · Attention router"]
-        R["identity + position + event + prosody<br/>→ priority score + overrides<br/>→ structured JSON"]
+        R["priority score<br/>+ safety overrides<br/>→ gate"]
     end
 
-    S3 --> OUT["🧠 LLM-ready<br/>awareness map"]
+    S3 --> OUT["🧠 awareness map<br/>(only surfaced sources)"]
 ```
 
 | Stage | Job | Default backend |

@@ -1,6 +1,6 @@
 # Daredevil — Handoff & CLI Reference
 
-**As of commit `db1d8f0` · branch `main` · 2026-05-29**
+**As of commit `da34e76` · branch `main` · 2026-05-30**
 
 Read `CLAUDE.md` first (goals + guardrails). This doc is the point-in-time
 snapshot: how to run everything, what's real vs. stubbed, and what's next.
@@ -56,7 +56,18 @@ python -m daredevil serve --live  # live HUD with real mic + ML backends
 
 ---
 
-## What's real (verified working on MacBook Air M2, 2026-05-28)
+## Platform status
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **MacBook (Apple Silicon)** | **Alpha — ready for testing** | MPS acceleration, all backends, verified live |
+| **Jetson / Orin** | In progress | CUDA + TensorRT path, needs ONNX export |
+| **Android** | Planned | ONNX Runtime Mobile + NNAPI EP |
+| **Windows** | Planned | ONNX Runtime + DirectML EP |
+| **Linux (x86)** | Planned | ONNX Runtime CPU/CUDA |
+| **Raspberry Pi** | Planned | Fallback-only or ONNX int8 |
+
+## What's real (verified working on MacBook Air M2, 2026-05-30)
 
 - **ECAPA-TDNN speaker embedding** — SpeechBrain, 192-dim, running on MPS (Apple Metal GPU). Proper audio normalization + embedding normalization per SpeechBrain docs. Match score 0.78+ on same-speaker.
 - **PANNs CNN14 event classification** — 527 AudioSet classes, 32kHz resampling, running on CPU. Correctly identifies Speech, Music, Whistling, Vehicle, Animal, etc.
@@ -68,7 +79,7 @@ python -m daredevil serve --live  # live HUD with real mic + ML backends
 - **Web HUD** — Neumorphic-steampunk orbital display. Known speakers on left column (3x linger), unknown active on radar, stale fading to right column (capacity-based eviction). Crash-resistant (handles refresh mid-inference).
 - **MCP server** — 4 tools (listen, awareness, enroll_speaker, devices). Stdio transport. Configured for Claude Code in `.claude/settings.local.json`.
 - **Pipeline logging** — Capture RMS, separation streams, tracker decisions, LLR state. Logs to stdout (redirect to file with `> /tmp/daredevil.log 2>&1`).
-- **Full test suite** — 9 tests passing with all real backends loaded.
+- **Full test suite** — 25 tests passing with all real backends loaded.
 - **Privacy** — No cloud, no raw audio stored, non-reversible embeddings only. COPPA compliant.
 
 ---
@@ -95,7 +106,42 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 
 ---
 
-## Recently fixed (WHO matching + tracking stitch)
+## Recently fixed (2026-05-30 session)
+
+- **Global SPRT key** — identity accumulates per enrolled speaker name, not per
+  tracker contact. One SPRT for "alan" that persists regardless of track thrash.
+- **Energy-only accumulator gate** — removed PANNs event-class gating. Music/noise
+  no longer blocks identity accumulation; the SPRT decides match, not the gate.
+- **Coasting tracks in awareness output** — the HUD now shows all live tracker
+  contacts, not just what the current frame detected. Contacts fade to sidebar
+  when coasting (lost for >5s), removed at 15s.
+- **Track status in awareness map** — `track_status` field (tentative/confirmed/coasting)
+  lets the HUD render contacts differently based on confidence.
+- **Calibration HUD panel** — neumorphic modal overlay with 3-2-1 countdown, level
+  meter, progress bar, d-prime result. Triggered by Calibrate chip or double-click core.
+- **Calibration active flag fix** — awareness endpoint was returning stale cached data
+  after calibration completed because `active` was never set back to false.
+- **Reverted sub-windowing** — 200ms chunks broke PANNs classification (needs 1s).
+  Restored full 1s capture with ConvTasNet separation.
+
+## Recently fixed (2026-05-29 session)
+
+- **Mic device selection** — `capture_live()` now picks the first input device with
+  native rate ≥ 44.1kHz, skipping dead Bluetooth endpoints (AirPods Max at 24kHz
+  returns zeros when not in call mode). MacBook Air mic is the reliable default.
+- **ConvTasNet energy normalization** — separated streams were amplified 100-1000x
+  (RMS 87 from a 0.07 input). Now normalized so total output energy matches input,
+  preserving relative proportions between streams.
+- **Separation energy-ratio gate** — ConvTasNet always outputs 2 streams even for a
+  single speaker, splitting harmonics 50/50. New `energy_ratio_cap=0.80` check:
+  if two streams have nearly equal energy, it's one source split in half, not two
+  real sources. Combined with lowered `distinct_cosine=0.60`.
+- **Calibrate wipes stale voiceprint** — enrollment during calibration now deletes the
+  old record first so you're never measuring against a voiceprint from a different
+  mic/session. Single recording used for both enrollment and verification (no double-
+  record UX bug). Default bumped to 20s.
+
+## Previously fixed (WHO matching + tracking stitch)
 
 - **Wald SPRT identity classifier** — `enrollment/manager.py` now accumulates a true
   per-frame log-likelihood ratio `logN(s;target) − logN(s;background)` and decides at
@@ -115,15 +161,59 @@ capture → spatial (DOA) → SEPARATION (ConvTasNet) → parallel slots → tra
 - All tunables live in `config.py` (`IdentityModel`, `TrackerParams`, `SeparationParams`)
   — no magic literals in the logic. 17 tests pass on stdlib alone.
 
+## In progress (2026-05-30)
+
+1. **LLR progress bar on UNKNOWN cards** — ✅ DONE. When a voiceprint is enrolled,
+   UNKNOWN contacts show a green progress bar: SPRT LLR building toward the Wald
+   bound. "identifying alan… 47%". Flips to enrolled card on match.
+
+2. **Focus → Gemma conversation loop** — Click a source card on the HUD to set it
+   as the focus target. Only that source's audio gets transcribed (local STT) and
+   routed to the local LLM (Gemma via Ollama). The agent knows the full room
+   (awareness map) but converses with ONE person. Everyone else is heard, tracked,
+   gated out of the conversation.
+
+   ```mermaid
+   flowchart LR
+       CLICK["click card<br/>on HUD"] --> FOCUS["POST /focus<br/>{id: 'alan'}"]
+       FOCUS --> PIPE["pipeline marks<br/>focused source"]
+       PIPE --> GATE{"focused source<br/>speaking?"}
+       GATE -->|yes| STT["local STT<br/>(Whisper ONNX)"]
+       GATE -->|no| WAIT["wait / coast"]
+       STT --> CTX["transcript +<br/>awareness map +<br/>identity + prosody"]
+       CTX --> LLM["Gemma 4<br/>(Ollama, local)"]
+       LLM --> HUD["chat bubble<br/>on HUD"]
+   ```
+
+   - Only the focused source's audio is transcribed
+   - Everyone else is heard, tracked, in the awareness map — but gated out of the conversation
+   - The LLM receives: who's talking, what they said, who else is in the room, any safety alerts
+
+3. **Persist SPRT state across restarts** — Save the LLR accumulators to disk so a
+   server restart doesn't mean cold start. Known voices re-lock in 1 frame instead
+   of rebuilding from zero.
+
 ## Known issues / next work (prioritized)
 
-1. **Feed-forward attention filter** — The gate should feed state back to the beginning of the next loop. Ambient sources get lightweight checks instead of full processing. Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
+1. **Persist SPRT state across restarts** — Cold start takes several seconds to
+   re-lock identity. Save LLR accumulators to disk so known voices lock in 1 frame
+   after a server restart.
 
-2. **Calibrate the SPRT score models on real ECAPA** — `IdentityModel` defaults
-   (`target_mean=0.65`, `impostor_mean=0.18`, …) are from published VoxCeleb stats;
-   measure your own enrolled cohort and tune them (and `alpha`/`beta`) to the live mic.
+2. **Wire Gemma conversation response** — Transcript goes to llama-cli (Gemma 3 4B,
+   Metal-accelerated, already installed). Response streams back to HUD as chat bubble.
+   The awareness map provides context (who else is in the room, any alerts).
 
-3. **Gemma LLM loop** — Wire surfaced sources (via `llm_payload(amap)`) to local Gemma (Ollama). Target < 3s to first token.
+3. **Speech gate calibration** — The 0.05 energy threshold is a hardcoded literal.
+   Should be derived from calibration data (measured background energy) and stored
+   as a named config tunable. Per WebRTC/Silero: use normalized energy + hysteresis.
+
+4. **Feed-forward attention filter** — The gate should feed state back to the beginning
+   of the next loop. Ambient sources get lightweight checks instead of full processing.
+   Design doc: `docs/ATTENTION_GATE_DESIGN.md`.
+
+5. **Streaming async pipeline (the loom)** — Replace batch capture-process-return with
+   a ring buffer + concurrent stream processing. Multiple sounds separated and tracked
+   in parallel. The mermaid in README shows the target architecture.
 
 5. **Live wake word** — openWakeWord ("Hey Radar") to steer focus.
 

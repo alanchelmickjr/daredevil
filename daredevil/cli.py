@@ -110,7 +110,7 @@ def main(argv=None) -> int:
 
     pc = sub.add_parser("calibrate", help="first-run 'get to know each other' session — seeds the identity model")
     pc.add_argument("--name", default=None)
-    pc.add_argument("-s", "--seconds", type=float, default=5.0)
+    pc.add_argument("-s", "--seconds", type=float, default=20.0)
     pc.add_argument("--live", action="store_true")
     pc.add_argument("--others", action="store_true", help="also sample a TV / second voice (live)")
 

@@ -66,7 +66,57 @@ svg.links{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-eve
 .bubble{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:40;display:none;
   background:var(--panel);border:1px solid var(--brass);border-radius:10px;padding:11px 18px;
   max-width:62%;font-size:13px;color:var(--ink);box-shadow:6px 6px 16px var(--sd)}
+.caption{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);z-index:35;
+  max-width:70%;padding:10px 20px;border-radius:10px;font-size:14px;color:var(--ink);
+  background:rgba(29,24,18,.92);border:1px solid var(--brass);
+  box-shadow:6px 6px 14px var(--sd);display:none;text-align:center}
+.caption.active{display:block}
+.caption .src{font-size:11px;color:var(--brass-lite);letter-spacing:1px;margin-bottom:4px}
 .legend{position:fixed;bottom:12px;left:18px;font-size:11px;color:var(--dim);z-index:30}
+/* --- Calibration overlay --- */
+.cal-overlay{position:fixed;inset:0;z-index:100;display:none;
+  background:rgba(10,8,5,.88);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center}
+.cal-overlay.active{display:flex}
+.cal-panel{width:420px;max-width:90vw;padding:28px 32px;border-radius:18px;
+  border:1px solid var(--brass);
+  background:linear-gradient(160deg,#1d1812,#151008);
+  box-shadow:12px 12px 30px var(--sd), -8px -8px 20px var(--sl), inset 0 0 40px rgba(0,0,0,.3)}
+.cal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.cal-title{font-size:16px;letter-spacing:4px;color:var(--brass-lite)}
+.cal-close{font-size:24px;color:var(--dim);cursor:pointer}
+.cal-phases{display:flex;gap:18px;margin-bottom:18px}
+.cal-phase{font-size:11px;letter-spacing:2px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.cal-phase.active{color:var(--brass-lite)}
+.cal-phase.done{color:var(--grn)}
+.cal-dot{width:8px;height:8px;border-radius:50%;border:1px solid currentColor;display:inline-block}
+.cal-phase.active .cal-dot{background:var(--brass-lite)}
+.cal-phase.done .cal-dot{background:var(--grn)}
+.cal-countdown{font-size:72px;text-align:center;color:var(--brass-lite);
+  font-family:Georgia,serif;min-height:90px;line-height:90px;
+  text-shadow:0 2px 8px rgba(192,138,62,.4)}
+.cal-prompt{font-size:14px;color:var(--ink);text-align:center;margin:12px 0;min-height:40px}
+.cal-meter{height:10px;border-radius:5px;background:#0c0a07;margin:12px 0;overflow:hidden;
+  box-shadow:inset 1px 1px 3px #000}
+.cal-meter-fill{height:100%;width:0%;border-radius:5px;transition:width .3s;
+  background:linear-gradient(90deg,var(--grn),#5ef0a0cc)}
+.cal-progress{height:5px;border-radius:3px;background:#0c0a07;margin:8px 0;overflow:hidden}
+.cal-progress-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--brass),var(--brass-lite));transition:width .4s}
+.cal-stats{font-size:11px;color:var(--dim);text-align:center;margin:8px 0;min-height:16px}
+.cal-result{text-align:center;margin:14px 0;display:none}
+.cal-result .dprime{font-size:28px;color:var(--brass-lite);font-weight:bold}
+.cal-result .err{font-size:12px;color:var(--dim);margin-top:4px}
+.cal-result .quality{font-size:13px;margin-top:6px;letter-spacing:2px}
+.cal-result .quality.good{color:var(--grn)}
+.cal-result .quality.fair{color:var(--brass-lite)}
+.cal-result .quality.poor{color:var(--red)}
+.cal-actions{display:flex;justify-content:center;gap:12px;margin-top:18px}
+.cal-btn{background:var(--panel);border:1px solid var(--brass);border-radius:20px;
+  padding:10px 22px;font-size:13px;color:var(--brass-lite);cursor:pointer;letter-spacing:2px;
+  box-shadow:inset 2px 2px 5px var(--sd),inset -2px -2px 5px var(--sl);transition:all .15s}
+.cal-btn:hover{background:#2a2218;border-color:var(--brass-lite)}
+.cal-btn:active{transform:scale(.96)}
+.cal-btn-dim{opacity:.6}
 </style>
 </head>
 <body>
@@ -74,17 +124,50 @@ svg.links{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-eve
   <div class="title">DAREDEVIL<small>SEEING WITH SOUND</small></div>
   <div class="chips">
     <div class="chip" id="wake">🎙 Hey Radar</div>
+    <div class="chip" id="calChip" style="cursor:pointer">⚙ Calibrate</div>
     <div class="chip">on-device · no cloud</div>
   </div>
 </div>
 <div class="stage" id="stage">
   <svg class="links" id="links"></svg>
-  <div class="core" id="core"><b>DAREDEVIL</b><span>tap to talk</span></div>
+  <div class="core" id="core"><b>DAREDEVIL</b><span>always listening</span></div>
 </div>
 <div class="known" id="known"></div>
 <div class="sidebar" id="sidebar"></div>
 <div class="bubble" id="bubble"></div>
-<div class="legend">green → routed to the LLM · grey dashed → heard, gated out · red → safety override · click a source to transcribe</div>
+<div class="cal-overlay" id="calOverlay">
+  <div class="cal-panel">
+    <div class="cal-header">
+      <span class="cal-title">CALIBRATION</span>
+      <span class="cal-close" id="calClose">&times;</span>
+    </div>
+    <div class="cal-phases">
+      <div class="cal-phase" data-phase="1"><span class="cal-dot"></span> SPEAK</div>
+      <div class="cal-phase" data-phase="2"><span class="cal-dot"></span> SHUT UP</div>
+      <div class="cal-phase" data-phase="3"><span class="cal-dot"></span> THE WORLD</div>
+    </div>
+    <div class="cal-countdown" id="calCountdown"></div>
+    <div class="cal-prompt" id="calPrompt">Click CALIBRATE to begin.</div>
+    <div class="cal-meter"><div class="cal-meter-fill" id="calMeter"></div></div>
+    <div class="cal-progress"><div class="cal-progress-fill" id="calProgress"></div></div>
+    <div class="cal-stats" id="calStats"></div>
+    <div class="cal-result" id="calResult"></div>
+    <div class="cal-name" style="margin-bottom:14px;text-align:center">
+      <input type="text" id="calName" placeholder="name (e.g. alan, jeff)" value=""
+        style="background:var(--panel);border:1px solid var(--brass);border-radius:8px;
+        padding:8px 14px;color:var(--ink);font-size:14px;width:200px;text-align:center;
+        box-shadow:inset 2px 2px 5px var(--sd),inset -2px -2px 5px var(--sl)"/>
+    </div>
+    <div class="cal-actions">
+      <button class="cal-btn" id="calStart">START</button>
+      <button class="cal-btn" id="calNext" style="display:none">NEXT PHASE</button>
+      <button class="cal-btn" id="calRetry" style="display:none">RE-RUN</button>
+      <button class="cal-btn cal-btn-dim" id="calDone" style="display:none">DONE</button>
+    </div>
+  </div>
+</div>
+<div class="caption" id="caption"></div>
+<div class="legend">green → routed to the LLM · grey dashed → heard, gated out · red → safety override · click a source to focus</div>
 <script>
 const stage=document.getElementById('stage'),links=document.getElementById('links'),
   core=document.getElementById('core'),bubble=document.getElementById('bubble'),
@@ -113,7 +196,7 @@ function makeCard(s){
   const c=document.createElement('div');c.className='card';
   c.innerHTML='<div class="hd"><span class="who"></span><span class="pr"></span></div>'
     +'<canvas></canvas><div class="ft"></div><div class="bar"><i></i></div><div class="gate"></div>';
-  c.onclick=()=>probe(s.id);
+  c.onclick=()=>setFocus(s.id,s.identity&&s.identity.name);
   return c;}
 function render(map){
   const now=Date.now(),cx=innerWidth/2,cy=innerHeight/2;links.innerHTML='';
@@ -130,6 +213,7 @@ function render(map){
     seen[s.id]=now;
     const surfaced=s.attention==='surface',safety=s.event&&s.event.safety_critical;
     const enrolled=s.type==='enrolled';
+    const coasting=s.track_status==='coasting';
     const col=safety?'#ff5a6e':(surfaced?'#5ef0a0':'#6b5d47');
     let c=cards[s.id];
     if(!c){c=makeCard(s);cards[s.id]=c;}
@@ -141,8 +225,16 @@ function render(map){
         known.appendChild(c);}
       c.className='card surface';
       c.style.opacity='';
+    } else if(coasting && s.id!==focusId && s.id!==map.focus
+              && !(s.identity && s.identity.name===focusId)){
+      // coasting = lost contact, fade to sidebar — but never fade the focused source
+      // (matched by track ID, server focus, OR identity name)
+      if(c.parentNode!==sidebar){c.remove();
+        c.style.left='';c.style.top='';c.style.position='relative';
+        c.style.transform='none';c.style.width='100%';
+        c.className='card stale';sidebar.appendChild(c);}
     } else {
-      // unknown active sources orbit on the radar
+      // active unknown sources orbit on the radar
       if(c.parentNode!==stage){c.remove();stage.appendChild(c);}
       const az=Math.round(((s.position&&s.position.azimuth)||0)/15)*15;
       const bucket=azBuckets[az]||[s];
@@ -155,8 +247,19 @@ function render(map){
     c.querySelector('.who').textContent=(safety?'⚠ ':'')+s.id;
     c.querySelector('.pr').textContent='p='+Number(s.priority).toFixed(2);
     c.querySelector('.ft').textContent=s.event.class+' · '+s.prosody.state;
-    c.querySelector('.bar i').style.width=Math.round(s.priority*100)+'%';
-    c.querySelector('.gate').textContent=surfaced?'→ ROUTED TO LLM':'gated · ambient';
+    // Identity progress bar: show LLR building toward match
+    if(s.identifying){
+      c.querySelector('.bar i').style.width=Math.round(s.identifying.progress*100)+'%';
+      c.querySelector('.bar i').style.background='linear-gradient(90deg,var(--grn),#5ef0a0cc)';
+      c.querySelector('.gate').textContent='identifying '+s.identifying.name+'… '+Math.round(s.identifying.progress*100)+'%';
+    }else{
+      c.querySelector('.bar i').style.width=Math.round(s.priority*100)+'%';
+      c.querySelector('.bar i').style.background='';
+      c.querySelector('.gate').textContent=surfaced?'→ ROUTED TO LLM':'gated · ambient';
+    }
+    // Focus highlight
+    if(s.id===focusId||map.focus===s.id){c.style.boxShadow='0 0 16px var(--grn), 6px 6px 14px var(--sd)';c.style.borderColor='var(--grn)';}
+    else{c.style.boxShadow='';c.style.borderColor='';}
     waveDraw(c.querySelector('canvas'),FREQ[s.event.class]||4,col);
     // draw link line for non-enrolled active sources
     if(!enrolled){
@@ -169,8 +272,10 @@ function render(map){
       links.appendChild(ln);}
   });
   // move stale cards to sidebar — known speakers linger 3x longer
+  // NEVER move the focused source — it stays pinned until manually cleared.
   Object.keys(cards).forEach(id=>{
     if(currentIds.has(id))return;
+    if(id===focusId||id===map.focus)return;
     const c=cards[id];
     const isKnown=c.parentNode===known;
     const age=now-(seen[id]||0);
@@ -193,19 +298,130 @@ function render(map){
     c.style.opacity=String(0.15+0.6*(i/Math.max(1,arr.length-1)));});
   activeIds=currentIds;
   if(map.wake_word)wake.textContent='🎙 '+map.wake_word;
+  // Captions + LLM response
+  const cap=document.getElementById('caption');
+  if(map.transcript&&map.transcript.text){
+    let html='<div class="src">'+map.transcript.source+'</div>'+map.transcript.text;
+    if(map.llm_response){
+      html+='<div style="margin-top:8px;color:var(--grn);font-style:italic">'+map.llm_response+'</div>';
+    }
+    cap.innerHTML=html;
+    cap.classList.add('active');
+  }else if(!map.focus){cap.classList.remove('active');}
 }
 function say(html,ms){bubble.style.display='block';bubble.innerHTML=html;
   clearTimeout(bubble._t);bubble._t=setTimeout(()=>bubble.style.display='none',ms||TOAST_MS);}
 function probe(id){fetch('/probe?id='+encodeURIComponent(id)).then(r=>r.json())
   .then(d=>say(d.implemented===false ? ('<b>'+d.id+'</b><br>TODO: '+d.todo)
                                      : ('<b>'+d.id+' → LLM</b><br>'+d.transcript))).catch(()=>{});}
-core.onclick=()=>say('<b>focus</b><br>listening for your command… (push-to-talk)');
+let focusId=null;
+function setFocus(id,identityName){
+  const fid=identityName||id;
+  if(focusId===fid){focusId=null;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});say('focus cleared');}
+  else{focusId=fid;fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:fid})});say('<b>focused:</b> '+fid+'<br>only this source talks to the LLM');}
+}
+core.onclick=()=>{if(focusId){setFocus(focusId);}else{say('click a source card to focus');}};
 function poll(){
   fetch('/awareness',{signal:AbortSignal.timeout(5000)})
     .then(r=>r.json()).then(d=>{render(d);setTimeout(poll,POLL_MS);})
     .catch(()=>{setTimeout(poll,POLL_MS*2);});}
 rings();poll();
 addEventListener('resize',()=>{document.querySelectorAll('.ring').forEach(r=>r.remove());rings();});
+
+// --- Calibration UX ---
+const calOverlay=document.getElementById('calOverlay'),
+  calCountdown=document.getElementById('calCountdown'),
+  calPrompt=document.getElementById('calPrompt'),
+  calMeter=document.getElementById('calMeter'),
+  calProgress=document.getElementById('calProgress'),
+  calStats=document.getElementById('calStats'),
+  calResult=document.getElementById('calResult'),
+  calStart=document.getElementById('calStart'),
+  calNext=document.getElementById('calNext'),
+  calRetry=document.getElementById('calRetry'),
+  calDone=document.getElementById('calDone'),
+  calClose=document.getElementById('calClose');
+let calPolling=false;
+const CAL_POLL_MS=300;
+
+function openCal(){
+  calOverlay.classList.add('active');
+  calResult.style.display='none';
+  calStart.style.display='';calNext.style.display='none';
+  calRetry.style.display='none';calDone.style.display='none';
+  calCountdown.textContent='';calPrompt.textContent='Hit START when ready.';
+  calMeter.style.width='0%';calProgress.style.width='0%';calStats.textContent='';
+  document.querySelectorAll('.cal-phase').forEach(p=>p.className='cal-phase');
+}
+function closeCal(){calOverlay.classList.remove('active');calPolling=false;}
+
+document.getElementById('calChip').onclick=openCal;
+core.addEventListener('dblclick',openCal);
+calClose.onclick=closeCal;
+calDone.onclick=closeCal;
+
+calStart.onclick=()=>{
+  fetch('/calibrate/start',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:document.getElementById('calName').value.trim()||'you',seconds:20,others:true})})
+  .then(()=>{
+    calStart.style.display='none';calNext.style.display='';
+    calPrompt.textContent='Ready. Hit NEXT PHASE when you\'re set to talk.';
+    calPolling=true;pollCal();
+  });};
+
+calNext.onclick=()=>{
+  fetch('/calibrate/phase',{method:'POST'});
+  calNext.style.display='none';};
+
+calRetry.onclick=()=>{calRetry.style.display='none';openCal();calStart.click();};
+
+function pollCal(){
+  if(!calPolling)return;
+  fetch('/calibrate/status',{signal:AbortSignal.timeout(3000)})
+    .then(r=>r.json()).then(renderCal).catch(()=>{})
+    .finally(()=>{if(calPolling)setTimeout(pollCal,CAL_POLL_MS);});}
+
+function renderCal(s){
+  // phase indicators
+  document.querySelectorAll('.cal-phase').forEach(p=>{
+    const idx=parseInt(p.dataset.phase);
+    if(idx<s.phase_index)p.className='cal-phase done';
+    else if(idx===s.phase_index)p.className='cal-phase active';
+    else p.className='cal-phase';});
+  // countdown
+  if(s.phase==='countdown'&&s.countdown>0){
+    calCountdown.textContent=s.countdown;
+  }else if(s.phase==='countdown'&&s.countdown===0){
+    calCountdown.textContent='GO';
+  }else{calCountdown.textContent='';}
+  // prompt
+  calPrompt.textContent=s.prompt;
+  // level meter
+  calMeter.style.width=Math.round(s.level*100)+'%';
+  calMeter.style.background=s.level>0.8?'linear-gradient(90deg,var(--red),#ff5a6ecc)':'';
+  // progress
+  if(s.duration>0&&s.elapsed>0){
+    calProgress.style.width=Math.round((s.elapsed/s.duration)*100)+'%';
+  }else{calProgress.style.width='0%';}
+  // stats
+  let st=[];
+  if(s.voice_frames)st.push(s.voice_frames+' voice frames');
+  if(s.bg_frames)st.push(s.bg_frames+' bg frames');
+  calStats.textContent=st.join(' · ');
+  // show NEXT when a phase completes
+  if(s.phase&&s.phase.endsWith('_done')&&calNext.style.display==='none'){
+    calNext.style.display='';}
+  // done
+  if(s.phase==='done'){
+    calPolling=false;calNext.style.display='none';
+    calResult.style.display='';
+    calResult.innerHTML='<div class="dprime">d′ = '+s.dprime+'</div>'
+      +'<div class="err">'+s.error_pct+'</div>'
+      +'<div class="quality '+s.quality+'">'+s.quality.toUpperCase()+'</div>';
+    if(s.quality==='poor')calRetry.style.display='';
+    calDone.style.display='';
+  }
+}
 </script>
 </body>
 </html>

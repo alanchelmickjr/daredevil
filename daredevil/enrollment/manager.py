@@ -193,13 +193,19 @@ class EnrollmentManager:
                          - _log_gaussian(s, mu0, sd0))
 
             kk = (key, name)
-            acc = (1.0 - idm.leak) * self._llr.get(kk, 0.0) + quality * frame_llr
-            if acc <= self._B:           # lower bound: definitively not this speaker -> reset
+            prev = self._llr.get(kk, 0.0)
+            was_decided = prev >= self._A
+            acc = (1.0 - idm.leak) * prev + quality * frame_llr
+            if was_decided:
+                # Hysteresis: once identified, hold. LLR never drops below the
+                # acquire threshold. Only explicit track deletion revokes identity.
+                acc = max(acc, self._A)
+            elif acc <= self._B:
                 acc = 0.0
             self._llr[kk] = acc
 
             posterior = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, acc))))
-            immediate = s >= idm.immediate_cosine          # one very clean frame is enough
+            immediate = s >= idm.immediate_cosine
             decided = immediate or acc >= self._A
 
             if idm.adapt_target and quality > 0.0:

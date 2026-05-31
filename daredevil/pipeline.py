@@ -27,6 +27,7 @@ from .stage2.embedding import EmbeddingSlot
 from .stage2.events import EventsSlot
 from .stage2.prosody import ProsodySlot
 from .stage3.tracker import UnknownTracker
+from .stage3.accumulator import IdentityAccumulator
 from .stage3.router import AttentionRouter
 from .enrollment.manager import EnrollmentManager
 from .fleet.store import make_store
@@ -76,6 +77,7 @@ class Pipeline:
         self.store = make_store(self.config)
         self.enrollment = EnrollmentManager(self.config, self.slots["embedding"], self.store)
         self.tracker = UnknownTracker(params=self.config.tracker)
+        self.accumulator = IdentityAccumulator()
         # Frame-stable spectral features for tracker association (NMF). ECAPA stays
         # for identity; this answers the different question of "same ongoing sound?".
         n = self.config.nmf
@@ -126,10 +128,8 @@ class Pipeline:
         log.info(f"capture: {cap.source} {cap.duration:.1f}s rms={_rms_fn(cap.mono):.4f}")
         spatial_sources: List[SpatialSource] = self.stage1.process(cap)
 
-        # --- Stage 1.5: source separation — only split when there really are
-        # multiple, distinct contacts. On a single talker, ConvTasNet manufactures
-        # a low-energy artifact stream; band-limiting through it would also corrupt
-        # the voiceprint, so we keep the clean wideband audio and let WHO run on it.
+        # --- Stage 1.5: source separation — split when there are genuinely
+        # multiple distinct contacts. Single source keeps clean wideband audio.
         sep = self.config.separation
         sources: List[SpatialSource] = []
         for src in spatial_sources:
@@ -140,7 +140,7 @@ class Pipeline:
             active = self._active_streams(streams, sep)
             log.info(f"separation: {len(streams)} stream(s) -> {len(active)} active contact(s)")
             if len(active) <= 1:
-                sources.append(src)  # single contact: keep clean wideband audio
+                sources.append(src)
             else:
                 for st in active:
                     sources.append(SpatialSource(
@@ -167,11 +167,10 @@ class Pipeline:
         sequential_ms = (time.perf_counter() - t1) * 1000
 
         # --- assemble per-source records from the parallel results.
-        # Every source is first associated to a persistent track (the contact);
-        # the SPRT classifier then accumulates identity evidence *per track* against
-        # the enrolled library. A track is named once its evidence crosses the Wald
-        # bound — until then it is the UNKNOWN-NNN contact. This is the stitch:
-        # WHERE (tracking) and WHO (identity) share one state per contact.
+        # The identity accumulator collects good frames (Speech + energetic) into
+        # per-source centroids that persist across tracker thrash. The SPRT runs
+        # against the accumulated centroid — not one-shot frame embeddings — so
+        # identity confidence grows as good chunks coalesce over time.
         from .audio.utils import rms as _rms
         records = []
         for src, res in zip(sources, per_source):
@@ -186,25 +185,61 @@ class Pipeline:
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
 
-            # Associate the contact on a frame-stable spectral feature (NMF), not
-            # the ECAPA embedding (which jitters frame to frame); classify identity
-            # on the ECAPA embedding, keyed to the resolved track.
-            track_feat = self.spectral.feature(src.audio, src.sr) if self.spectral else emb
-            track_id = self.tracker.assign(track_feat, position=pos, event_class=ev.get("class"))
-            match = self.enrollment.match(emb, energy=energy, key=track_id)
+            # Tracker uses the ECAPA embedding directly for association (diart pattern).
+            # Centroid accumulates with each assignment — the curve grows, never resets.
+            track_id = self.tracker.assign(emb, position=pos, event_class=ev.get("class"))
 
+            # Identity: SPRT runs every speech frame. Centroid accumulates in
+            # parallel (diart pattern: centers += embedding). The SPRT decides,
+            # the centroid holds. Both grow along curves, never reset.
+            from .audio.utils import is_speech_quality
+            match = None
             identity = None
-            if self.enrollment.is_match(match):
+            identifying = None
+
+            if src.truth is not None or is_speech_quality(src.audio, src.sr):
+                match = self.enrollment.match(emb, energy=energy, key="global")
+
+            if match is None:
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
+                         f"[non-speech, skipped]")
+            elif self.enrollment.is_match(match):
                 identity = {"name": match["name"], "score": match["score"],
                             "enrollment_confidence": match["enrollment_confidence"]}
                 log.info(f"  {track_id} → MATCHED {match['name']} "
                          f"raw={match['raw']:.3f} llr={match['llr']:.2f} score={match['score']:.3f}")
+            elif match["llr"] > 0:
+                identifying = {"name": match["name"], "llr": match["llr"],
+                               "bound": self.enrollment._A,
+                               "progress": min(1.0, match["llr"] / self.enrollment._A)}
+                log.info(f"  {track_id} identifying {match['name']} "
+                         f"llr={match['llr']:.2f}/{self.enrollment._A:.2f} "
+                         f"({identifying['progress']*100:.0f}%)")
             else:
-                bl = match["llr"] if match else 0.0
-                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} best_llr={bl:.2f}")
+                log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
+                         f"cos={match['raw']:.3f} llr={match['llr']:.2f}")
 
-            records.append({"identity": identity, "unknown_id": track_id,
-                            "event": ev, "prosody": pr, "position": pos})
+            t_status = self.tracker.status_of(track_id) or "confirmed"
+            records.append({"identity": identity, "identifying": identifying,
+                            "unknown_id": track_id,
+                            "event": ev, "prosody": pr, "position": pos,
+                            "track_status": t_status})
+
+        # Include coasting tracks that weren't seen this frame — they persist
+        # on the radar until they age out. Status tells the HUD what to do:
+        # confirmed = on radar, coasting = fade to sidebar, tentative = dim.
+        seen_ids = {r["unknown_id"] for r in records}
+        for t in self.tracker._tracks:
+            if t["id"] not in seen_ids:
+                records.append({
+                    "identity": None, "unknown_id": t["id"],
+                    "event": {"class": t.get("event_class") or "unknown",
+                              "confidence": 0.0, "safety_critical": False},
+                    "prosody": {"state": "calm", "distress": 0.0},
+                    "position": {"azimuth": t.get("azimuth"), "elevation": 0.0}
+                    if t.get("azimuth") is not None else None,
+                    "track_status": t["status"],
+                })
 
         # Forget SPRT accumulators for contacts that have aged out.
         self.enrollment.retain(self.tracker.live_ids())
@@ -230,6 +265,10 @@ class Pipeline:
         if it carries a meaningful fraction of the primary's energy AND is
         spectrally distinct from it. Otherwise the secondary is a separation
         artifact of a single source and is discarded.
+
+        Key heuristic: if two streams have nearly equal energy (ratio > energy_ratio_cap),
+        ConvTasNet almost certainly split one source in half — real concurrent sources
+        rarely have identical loudness.
         """
         if not streams:
             return []
@@ -240,6 +279,9 @@ class Pipeline:
         active = [primary]
         for st in ordered[1:]:
             if st["energy"] < sep.dominance_ratio * primary["energy"]:
+                continue
+            # Near-equal energy = one source split in half, not two real sources.
+            if primary["energy"] > 0 and st["energy"] / primary["energy"] > sep.energy_ratio_cap:
                 continue
             if cosine(fingerprint(st["audio"], st["sr"]), pf) >= sep.distinct_cosine:
                 continue
