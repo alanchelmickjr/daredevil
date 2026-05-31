@@ -95,26 +95,24 @@ def spectral_centroid(signal: Sequence[float], sr: int) -> float:
 
 
 def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
-    """Fast speech-quality gate. Pure stdlib, ~0.1ms. Rejects silence, clicks, noise.
+    """Energy + ZCR gate for speech quality. Modeled on WebRTC VAD mode 0.
 
-    Speech has: high energy, low zero-crossing rate (~50-150Hz), and more
-    low-band than high-band energy (spectral tilt ~-6dB/octave).
-    Non-speech frames are non-evidence — they shouldn't vote in the SPRT.
+    Production systems (Silero, pyannote, SpeechBrain) all gate on energy
+    with hysteresis. We use energy threshold + ZCR to reject clicks/noise.
+    No spectral tilt — real speech through a laptop mic in a noisy room
+    doesn't have clean spectral characteristics.
+
+    Non-speech frames are non-evidence — they don't vote in the SPRT.
     """
     n = len(audio)
     if n < 100:
         return False
     energy = (sum(x * x for x in audio) / n) ** 0.5
-    if energy < 0.01:
+    if energy < 0.02:
         return False
     zcr = sum(1 for i in range(1, n) if audio[i - 1] * audio[i] < 0)
     zcr_rate = zcr * sr / n
     if zcr_rate > 3000:
-        return False
-    split = max(1, n * 1000 // sr)
-    low_e = sum(x * x for x in audio[:split]) + 1e-10
-    high_e = sum(x * x for x in audio[split:]) + 1e-10
-    if low_e / high_e < 1.5:
         return False
     return True
 
