@@ -11,11 +11,11 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Runs anywhere](https://img.shields.io/badge/runs-anywhere%20(no%20GPU%20needed)-brightgreen.svg)](#runs-everywhere)
 [![On-device](https://img.shields.io/badge/inference-100%25%20on--device-blueviolet.svg)](#privacy-is-the-point)
-[![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha%20(not%20yet%20installable)-red.svg)](#status)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 
 </div>
 
-> **Status: pre-alpha.** This repo is under active development. The architecture works, the models run, identity matching is being tuned. It is **not ready for `pip install` and use** — you'll hit rough edges. Star/watch for the release announcement, or read on if you want to contribute or follow along.
+> **Status: pre-alpha → alpha.** Identity matching works. The system detects WHO is speaking in a noisy room (conference calls, music, traffic), locks identity via SPRT accumulation, tracks contacts across frames, and transcribes the focused speaker locally via whisper.cpp. The web HUD shows it all in real time. Not yet packaged for general use — star/watch for the release, or read on to contribute.
 
 
 

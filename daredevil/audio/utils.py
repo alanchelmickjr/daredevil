@@ -108,7 +108,7 @@ def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
     if n < 100:
         return False
     energy = (sum(x * x for x in audio) / n) ** 0.5
-    if energy < 0.02:
+    if energy < 0.05:
         return False
     zcr = sum(1 for i in range(1, n) if audio[i - 1] * audio[i] < 0)
     zcr_rate = zcr * sr / n
