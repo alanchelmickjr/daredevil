@@ -225,8 +225,8 @@ function render(map){
         known.appendChild(c);}
       c.className='card surface';
       c.style.opacity='';
-    } else if(coasting){
-      // coasting = lost contact, fade to sidebar
+    } else if(coasting && s.id!==focusId && s.id!==map.focus){
+      // coasting = lost contact, fade to sidebar — but never fade the focused source
       if(c.parentNode!==sidebar){c.remove();
         c.style.left='';c.style.top='';c.style.position='relative';
         c.style.transform='none';c.style.width='100%';
