@@ -204,12 +204,7 @@ class _State:
         self.pipe.warmup()
         self._last = None
         self._busy = False
-        # Auto-focus the first enrolled speaker so identity + transcription
-        # work immediately after restart without re-clicking.
-        enrolled = self.pipe.enrollment.names()
-        self._focus_id = enrolled[0] if enrolled else None
-        if self._focus_id:
-            self.pipe.config.focus = self._focus_id
+        self._focus_id = None
         from .transcriber import Transcriber
         self.transcriber = Transcriber()
         self.cal = _CalibrationSession(self)
@@ -276,23 +271,14 @@ class _State:
             try:
                 if self._focus_id and audio:
                     from ..audio.utils import rms as _rms_check
-                    # Match focus by source ID OR enrolled identity name
-                    is_focused_source = any(
-                        s["id"] == self._focus_id or
-                        (s.get("identity") and s["identity"].get("name") == self._focus_id)
-                        for s in amap.get("sources", [])
-                    )
                     energy = _rms_check(audio)
-                    is_speaking = is_focused_source and energy > self.pipe.config.thresholds.vad * 3
-                    log.info(f"  transcriber: focus={self._focus_id} found={is_focused_source} "
-                             f"energy={energy:.4f} speaking={is_speaking} "
-                             f"buf={len(self.transcriber._buffers.get(self._focus_id, []))}")
+                    # Transcribe any speech when focus is set — don't wait for identity
+                    is_speaking = energy > self.pipe.config.thresholds.vad * 3
                     self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
                     results = self.transcriber.check_pauses()
                     if results:
                         transcript_text = results[0][1]
                         amap["transcript"] = {"source": results[0][0], "text": transcript_text}
-                        # Send to Gemma via llama-cli for a response
                         response = self._ask_gemma(transcript_text, amap)
                         if response:
                             amap["llm_response"] = response
