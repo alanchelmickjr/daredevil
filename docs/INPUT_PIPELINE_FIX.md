@@ -62,8 +62,8 @@ optimal) removes the `0.1` magic literal and the float-trunc bug by construction
 - [x] 4. `spatial.py`: gate DOA on actual `n_channels == n_mics ≥ 2`; `log.debug` the except (stop masking)
 - [x] 5. `config.py`: `load_calibration` ignores degenerate model (d′ < 0.5) with a clear warning
 - [x] 6. Verify: `pytest -q` + synthetic `listen` smoke
-- [ ] 7. Commit + push to `claude/brave-gauss-5sG9E`
-- [ ] 8. Hand user the calibration reset steps
+- [x] 7. Commit + push to `claude/brave-gauss-5sG9E` (commit d32ea7c)
+- [x] 8. Hand user the calibration reset steps (in this doc + chat)
 
 ## Step log
 - Step 0 done: read tests, captured constraints; measured synthetic d′=31.2; baseline pytest
