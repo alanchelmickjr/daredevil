@@ -27,7 +27,6 @@ from .stage2.embedding import EmbeddingSlot
 from .stage2.events import EventsSlot
 from .stage2.prosody import ProsodySlot
 from .stage3.tracker import UnknownTracker
-from .stage3.accumulator import IdentityAccumulator
 from .stage3.router import AttentionRouter
 from .enrollment.manager import EnrollmentManager
 from .fleet.store import make_store
@@ -77,14 +76,14 @@ class Pipeline:
         self.store = make_store(self.config)
         self.enrollment = EnrollmentManager(self.config, self.slots["embedding"], self.store)
         self.tracker = UnknownTracker(params=self.config.tracker)
-        self.accumulator = IdentityAccumulator()
-        # Frame-stable spectral features for tracker association (NMF). ECAPA stays
-        # for identity; this answers the different question of "same ongoing sound?".
+        # Frame-stable spectral features for tracker association (NMF). The tracker
+        # uses these to answer "same ongoing sound?" — NOT ECAPA embeddings, which
+        # answer WHO and drift when accumulated. ECAPA stays for identity (SPRT).
         n = self.config.nmf
-        self.spectral = (SpectralLibrary(
+        self.spectral = SpectralLibrary(
             n_bins=n.n_bins, n_components=n.n_components, fit_after=n.fit_after,
             learn_iters=n.learn_iters, decompose_iters=n.decompose_iters,
-            vad=self.config.thresholds.vad) if n.enabled else None)
+            vad=self.config.thresholds.vad)
         self.router = AttentionRouter(self.config)
         if warmup:
             self.warmup()
@@ -158,12 +157,11 @@ class Pipeline:
                 per_source.append({n: f.result() for n, f in futs.items()})
         parallel_ms = (time.perf_counter() - t0) * 1000
 
-        # --- assemble per-source records from the parallel results.
-        # The identity accumulator collects good frames (Speech + energetic) into
-        # per-source centroids that persist across tracker thrash. The SPRT runs
-        # against the accumulated centroid — not one-shot frame embeddings — so
-        # identity confidence grows as good chunks coalesce over time.
-        from .audio.utils import rms as _rms
+        # --- assemble per-source records.
+        # Sonar pattern: DETECT (energy gate) → TRACK (NMF features, bearing) →
+        # CLASSIFY (SPRT on ECAPA embedding, keyed by stable track_id).
+        # Each layer has one job. No layer tries to do the other's work.
+        from .audio.utils import rms as _rms, is_speech_quality
         records = []
         for src, res in zip(sources, per_source):
             emb = res.get("embedding", {}).get("vector")
@@ -177,23 +175,19 @@ class Pipeline:
             if src.azimuth is not None:
                 pos = {"azimuth": src.azimuth, "elevation": src.elevation or 0.0}
 
-            # Tracker uses the ECAPA embedding directly for association (diart pattern).
-            # Centroid accumulates with each assignment — the curve grows, never resets.
-            track_id = self.tracker.assign(emb, position=pos, event_class=ev.get("class"))
+            # TRACK: associate by NMF spectral feature (frame-stable "same sound?").
+            nmf_feature = self.spectral.feature(src.audio, src.sr)
+            track_id = self.tracker.assign(nmf_feature, position=pos, event_class=ev.get("class"))
 
-            # Feed identity accumulator — builds centroid confidence over time.
-            frame_quality = min(1.0, energy / 0.05) if energy > self.config.thresholds.vad else 0.0
-            acc_id = self.accumulator.ingest(emb, frame_quality)
-            acc_src = self.accumulator.get_source(acc_id) if acc_id else None
-            centroid_confidence = acc_src.confidence() if acc_src else 0.0
-
-            from .audio.utils import is_speech_quality
+            # CLASSIFY: SPRT keyed by track_id. The track IS the stable address —
+            # LLR accumulates as long as this track lives. retain() prunes only
+            # when the track dies. No more key mismatch.
             match = None
             identity = None
             identifying = None
 
             if src.truth is not None or is_speech_quality(src.audio, src.sr):
-                match = self.enrollment.match(emb, energy=energy, key="global")
+                match = self.enrollment.match(emb, energy=energy, key=track_id)
 
             if match is None:
                 log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
@@ -218,8 +212,7 @@ class Pipeline:
             records.append({"identity": identity, "identifying": identifying,
                             "unknown_id": track_id,
                             "event": ev, "prosody": pr, "position": pos,
-                            "track_status": t_status,
-                            "centroid_confidence": round(centroid_confidence, 3)})
+                            "track_status": t_status})
 
         # Include coasting tracks that weren't seen this frame — they persist
         # on the radar until they age out. Status tells the HUD what to do:
@@ -235,7 +228,6 @@ class Pipeline:
                     "position": {"azimuth": t.get("azimuth"), "elevation": 0.0}
                     if t.get("azimuth") is not None else None,
                     "track_status": t["status"],
-                    "centroid_confidence": 0.0,
                 })
 
         # Forget SPRT accumulators for contacts that have aged out.

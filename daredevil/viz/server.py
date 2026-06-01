@@ -276,10 +276,7 @@ class _State:
                                                return_audio=True)
             amap["wake_word"] = self.pipe.config.wake_word
             amap["focus"] = self._focus_id
-            amap["accumulator"] = {
-                "sources": len(self.pipe.accumulator.sources),
-                "top_llr": self.pipe.enrollment.top_llr(),
-            }
+            amap["top_llr"] = self.pipe.enrollment.top_llr()
 
             # Surface any previously-completed STT/LLM results.
             if self._transcript:

@@ -1,14 +1,14 @@
 """Multi-target track manager — persistent UNKNOWN-NNN contacts (patent Claim 6).
 
-Modeled on a passive-sonar tracker rather than ad-hoc recency. Each frame's
-detection is gated and associated to an existing track by embedding similarity
-(and bearing, when a DOA azimuth is available); an unmatched detection starts a
-new tentative track. Tracks are confirmed by M-of-N hit logic, coast through
-misses, and are deleted after sustained silence. Bearing (azimuth) is smoothed
-with an alpha-beta filter so a contact's direction is stable frame to frame.
+Modeled on a passive-sonar tracker: each frame's detection is associated to an
+existing track by NMF spectral features (frame-stable "same ongoing sound?") and
+bearing gating. ECAPA embeddings are NOT used for association — they answer WHO,
+not WHICH, and drift when accumulated. The tracker answers WHERE/WHEN only.
 
-All time constants and gates live in ``TrackerParams`` (config) — none are baked
-into the logic here.
+Tracks are confirmed by M-of-N hit logic, coast through misses, and are deleted
+after sustained silence. Bearing (azimuth) is smoothed with an alpha-beta filter.
+
+All time constants and gates live in ``TrackerParams`` (config).
 """
 from __future__ import annotations
 
@@ -31,29 +31,31 @@ class UnknownTracker:
     def __init__(self, threshold: Optional[float] = None,
                  params: Optional[TrackerParams] = None):
         self.p = params or TrackerParams()
-        # `threshold` (if given) overrides the association gate — kept for the
-        # historical constructor signature.
         self.threshold = self.p.assoc_cosine if threshold is None else threshold
         self._tracks: List[dict] = []
         self._counter = 0
 
     # ------------------------------------------------------------- assign
-    def assign(self, vector: Sequence[float], position: Optional[dict] = None,
-               event_class: Optional[str] = None, single_source: bool = False) -> str:
-        """Associate a detection to a track (or open a new one); return the track id."""
+    def assign(self, feature: Sequence[float], position: Optional[dict] = None,
+               event_class: Optional[str] = None) -> str:
+        """Associate a detection to a track (or open a new one); return the track id.
+
+        `feature` is a frame-stable spectral feature (NMF activations or band
+        envelope), NOT an ECAPA embedding. It answers "same ongoing sound?" which
+        is stable frame-to-frame for the same physical source.
+        """
         now = time.monotonic()
         self._prune(now)
         az = position.get("azimuth") if position else None
 
         cand, best = None, -1e9
         for t in self._tracks:
-            raw = cosine(vector, t["vector"])
+            raw = cosine(feature, t["feature"])
             gap = None
             if az is not None and t.get("azimuth") is not None:
                 gap = _bearing_gap(az, t["azimuth"])
                 if gap > self.p.bearing_gate_deg:
-                    continue  # outside the bearing gate — cannot be the same contact
-            # Embedding gate, relaxed slightly when bearing corroborates.
+                    continue
             gate = self.threshold - (self.p.bearing_assist if gap is not None else 0.0)
             if raw < gate:
                 continue
@@ -68,21 +70,20 @@ class UnknownTracker:
                 best, cand = score, t
 
         if cand is not None:
-            self._update(cand, vector, az, event_class, now)
+            self._update(cand, feature, az, event_class, now)
             return cand["id"]
-        return self._new(vector, az, event_class, position, now)
+        return self._new(feature, az, event_class, position, now)
 
     # ------------------------------------------------------------- internals
-    def _update(self, t: dict, vector, az, event_class, now) -> None:
-        # Accumulate centroid (diart pattern: centers += embedding).
-        # Normalize at comparison time, not here — the sum grows with confidence.
-        m = min(len(t["vector"]), len(vector))
-        t["vector"] = [t["vector"][i] + vector[i] for i in range(m)]
+    def _update(self, t: dict, feature, az, event_class, now) -> None:
+        # Replace the stored feature with the latest observation — no accumulation.
+        # NMF features are frame-stable by construction; the latest is the best
+        # representation of what the source sounds like RIGHT NOW.
+        t["feature"] = list(feature)
         if az is not None:
             if t.get("azimuth") is None:
                 t["azimuth"], t["az_rate"] = az, 0.0
             else:
-                # alpha-beta filter on the shortest signed bearing residual
                 resid = ((az - t["azimuth"] + 180.0) % 360.0) - 180.0
                 t["azimuth"] = (t["azimuth"] + self.p.bearing_alpha * resid) % 360.0
                 t["az_rate"] = t["az_rate"] + self.p.bearing_beta * resid
@@ -94,11 +95,11 @@ class UnknownTracker:
         elif t["status"] == COASTING:
             t["status"] = CONFIRMED if t["hits"] >= self.p.confirm_hits else TENTATIVE
 
-    def _new(self, vector, az, event_class, position, now) -> str:
+    def _new(self, feature, az, event_class, position, now) -> str:
         self._counter += 1
         sid = f"UNKNOWN-{self._counter:03d}"
         self._tracks.append({
-            "id": sid, "vector": list(vector), "hits": 1,
+            "id": sid, "feature": list(feature), "hits": 1,
             "born": now, "last_seen": now, "status": TENTATIVE,
             "event_class": event_class, "azimuth": az, "az_rate": 0.0,
             "position": position,
