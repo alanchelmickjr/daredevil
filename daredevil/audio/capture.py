@@ -12,6 +12,7 @@ so the architecture exercised is identical to the live path.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import random
 import wave
@@ -20,7 +21,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from .utils import to_mono
-from ..stage1.mic_arrays import MicArray, detect as detect_array, MACBOOK_3, SINGLE
+from ..stage1.mic_arrays import MicArray, detect as detect_array, MACBOOK_3, SINGLE, REGISTRY
+
+log = logging.getLogger("daredevil.capture")
 
 __all__ = [
     "CaptureResult",
@@ -209,81 +212,106 @@ def _pick_input_device():
     AirPods and some Bluetooth devices show up as the default input but return
     zeros when not in a call/voice profile.  Fall back to a device that has a
     native sample rate >= 44.1 kHz (rules out dead BT SCO endpoints).
+
+    Returns (device_index, native_sample_rate, max_input_channels).
     """
     import sounddevice as sd
     default_idx = sd.default.device[0]
     devs = sd.query_devices()
     default = devs[default_idx] if default_idx is not None else None
     if default and default["max_input_channels"] > 0 and default["default_samplerate"] >= 44100:
-        return default_idx, int(default["default_samplerate"])
+        return default_idx, int(default["default_samplerate"]), int(default["max_input_channels"])
     # Default looks suspect (e.g. BT at 24kHz) — find the built-in mic.
     for i, d in enumerate(devs):
         if d["max_input_channels"] > 0 and d["default_samplerate"] >= 44100:
-            return i, int(d["default_samplerate"])
+            return i, int(d["default_samplerate"]), int(d["max_input_channels"])
     # Last resort: use whatever the OS says, at its native rate.
     if default and default["max_input_channels"] > 0:
-        return default_idx, int(default["default_samplerate"])
-    return None, 48000
+        return default_idx, int(default["default_samplerate"]), int(default["max_input_channels"])
+    return None, 48000, 1
+
+
+def _reconcile_array(arr: MicArray, nch: int):
+    """Guarantee captured channels == array.n_mics so the spatial stage never gets
+    a geometry it can't fill. Returns (array, channels_to_capture).
+
+    If the requested array's mic count already matches the channels we can capture,
+    keep it. Otherwise adopt a shipped geometry with exactly that many mics; if none
+    matches, capture mono with SINGLE — we never advertise a spatial geometry we did
+    not actually capture (rule: no fakes).
+    """
+    if arr.n_mics == nch:
+        return arr, nch
+    for a in REGISTRY.values():
+        if a.n_mics == nch:
+            return a, nch
+    return SINGLE, 1
 
 
 class MicStream:
-    """Persistent mic stream — always open, callback pushes into a queue.
+    """Persistent mic stream with a *blocking* read — self-pacing and gapless.
 
-    The key insight from diart: the stream stays open permanently. The consumer
-    (capture_live) reads the most recent 1s from the queue on each call.
-    Old chunks beyond the requested window are discarded — this prevents lag
-    without throwing away current speech.
+    sounddevice's ``InputStream.read(frames)`` blocks until exactly ``frames`` are
+    available and returns contiguous audio. Keeping one stream open avoids the
+    per-call open/close (no mic-indicator flashing); the blocking read paces the
+    consumer to real time, so there is no ring buffer to silently overwrite or peek
+    — every call returns fresh, contiguous, multichannel audio. The stream is a
+    singleton keyed on (channels, device, sr); it re-opens if it dies or if a
+    different shape is requested.
     """
 
     _instance = None
 
     @classmethod
-    def get(cls) -> "MicStream":
-        if cls._instance is None or not cls._instance._open:
-            cls._instance = cls()
+    def get(cls, channels: int, device, sr: int) -> "MicStream":
+        inst = cls._instance
+        if (inst is None or not inst.healthy()
+                or inst.channels != channels or inst.device != device or inst.sr != sr):
+            if inst is not None:
+                inst.close()
+            cls._instance = cls(channels, device, sr)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, channels: int, device, sr: int):
         import sounddevice as sd
-        from collections import deque
-        import threading
-        dev_idx, native_sr = _pick_input_device()
-        self.sr = native_sr
-        block_samples = int(0.1 * self.sr)  # 100ms blocks
-        # Ring buffer: hold last 2s of audio (20 blocks of 100ms)
-        self._ring: "deque" = deque(maxlen=20)
-        self._lock = threading.Lock()
+        self.channels = channels
+        self.device = device
+        self.sr = sr
+        # blocksize=0 lets PortAudio pick the optimal block; read() still returns the
+        # exact frame count we ask for, so there is no block-size arithmetic (and no
+        # magic 0.1s literal / float-truncation to get wrong).
         self._stream = sd.InputStream(
-            channels=1,
-            samplerate=self.sr,
-            blocksize=block_samples,
-            device=dev_idx,
-            dtype="float32",
-            callback=self._callback,
+            channels=channels, samplerate=sr, blocksize=0,
+            device=device, dtype="float32",
         )
         self._stream.start()
         self._open = True
 
-    def _callback(self, indata, frames, time_info, status):
-        with self._lock:
-            self._ring.append(indata[:, 0].copy())
+    def healthy(self) -> bool:
+        if not self._open:
+            return False
+        try:
+            return bool(self._stream.active)
+        except Exception:
+            return False
 
-    def read_latest(self, seconds: float) -> List[float]:
-        """Return the most recent `seconds` of audio. No lag — always current."""
-        n_blocks = int(seconds / 0.1)
-        with self._lock:
-            blocks = list(self._ring)
-        # Take the most recent n_blocks
-        recent = blocks[-n_blocks:] if len(blocks) >= n_blocks else blocks
-        if not recent:
-            return [0.0] * int(seconds * self.sr)
-        import itertools
-        return list(itertools.chain.from_iterable(b.tolist() for b in recent))
+    def read(self, seconds: float) -> List[List[float]]:
+        """Block for `seconds` of fresh, contiguous audio; return per-channel lists."""
+        frames = max(1, int(round(seconds * self.sr)))
+        data, overflowed = self._stream.read(frames)
+        if overflowed:
+            # PortAudio dropped its oldest queued samples to keep us current — fine
+            # for a live monitor, but a breadcrumb if it turns chronic.
+            log.debug("input overflow: host buffer outran the consumer")
+        return [data[:, c].tolist() for c in range(self.channels)]
 
     def close(self):
         if self._open:
-            self._stream.stop()
-            self._stream.close()
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
             self._open = False
 
     @property
@@ -293,17 +321,31 @@ class MicStream:
 
 def capture_live(seconds: float = 1.0, sr: int = 48000,
                  array: Optional[MicArray] = None) -> CaptureResult:
-    """Read the most recent audio from the persistent mic stream."""
+    """Read fresh, contiguous audio from the persistent mic stream.
+
+    The blocking read is self-pacing (returns after exactly `seconds`) and gapless,
+    captures multichannel for DOA, and keeps the device open (no flashing). The
+    array is reconciled to the channels we can actually capture, so the spatial
+    stage never receives a geometry it can't fill. If the persistent stream can't
+    be created or read, fall back to a one-shot recording (still self-pacing via
+    sd.wait); if sounddevice is unavailable entirely, raise so the caller degrades
+    to the synthetic scene.
+    """
     arr = array or detect_array()
+    import sounddevice as sd  # raises if unavailable -> caller falls back to synthetic
+    dev_idx, native_sr, max_in = _pick_input_device()
+    use_sr = native_sr if native_sr >= 44100 else sr
+    want = max(1, arr.n_mics)
+    nch = min(want, max_in) if max_in else want
+    arr, nch = _reconcile_array(arr, nch)
     try:
-        mic = MicStream.get()
-        samples = mic.read_latest(seconds)
-        return CaptureResult(channels=[samples], sample_rate=mic.sr, array=arr, source="live")
+        mic = MicStream.get(nch, dev_idx, use_sr)
+        channels = mic.read(seconds)
+        return CaptureResult(channels=channels, sample_rate=mic.sr, array=arr, source="live")
     except Exception:
-        import sounddevice as sd
-        nch = max(1, arr.n_mics)
-        dev_idx, native_sr = _pick_input_device()
-        use_sr = native_sr if native_sr >= 44100 else sr
+        # Persistent stream failed (driver quirk, device busy) — one-shot fallback,
+        # honouring the same channel/array contract.
+        log.debug("persistent stream failed; using one-shot sd.rec()", exc_info=True)
         rec = sd.rec(int(seconds * use_sr), samplerate=use_sr, channels=nch,
                      device=dev_idx, dtype="float32")
         sd.wait()

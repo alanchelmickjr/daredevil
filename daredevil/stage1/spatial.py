@@ -7,11 +7,14 @@ the rest of the pipeline behaves identically to a live multi-source capture.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
 from ..audio.capture import CaptureResult
 from ..audio.utils import resample
+
+log = logging.getLogger("daredevil.spatial")
 
 
 @dataclass
@@ -28,7 +31,13 @@ class Stage1:
         self.inference_sr = inference_sr
 
     def process(self, cap: CaptureResult) -> List[SpatialSource]:
-        spatial = cap.array.spatial_capable
+        # Trust the audio actually captured, not just the array label: DOA needs at
+        # least two channels AND a geometry matching the channel count. The live path
+        # reconciles array<->channels, so this also stops a 1-channel buffer tagged
+        # with a multi-mic array from silently throwing inside SRP-PHAT.
+        spatial = (cap.array.spatial_capable
+                   and cap.n_channels >= 2
+                   and cap.n_channels == cap.array.n_mics)
 
         # Synthetic scene: treat each ground-truth source as perfectly separated.
         if cap.synthetic and cap.scene_truth:
@@ -51,7 +60,8 @@ class Stage1:
         # Real multichannel: attempt SRP-PHAT; fall back to a single undirected source.
         try:
             return self._srp_phat(cap)
-        except Exception:
+        except Exception as e:
+            log.debug("SRP-PHAT failed (%s); degrading to mono", e)
             return [SpatialSource(audio=mono, sr=self.inference_sr)]
 
     def _srp_phat(self, cap: CaptureResult) -> List[SpatialSource]:
