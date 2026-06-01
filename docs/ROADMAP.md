@@ -58,6 +58,10 @@ including those the law won't let anyone else identify in the cloud.
       librosa prosody (`[prosody]`); validate accuracy
 - [ ] Live multi-mic SRP-PHAT on a real array (`[audio]` + `[spatial]`)
 - [ ] ONNX Runtime portable backend (CoreML / TensorRT) + int8 quantization
+- [ ] **Portable runtime** — Rust core + thin platform shims so one SDK runs on
+      every device an agent runs on (the open source *is* the brand). Strategy:
+      [`PORTABILITY.md`](PORTABILITY.md); first target (iPhone 13+):
+      [`IOS_PORT.md`](IOS_PORT.md)
 - [ ] Live Gun P2P voiceprint sync across two devices (encrypted, SEA)
 - [ ] Record the demo video (deterministic `--file` scene)
 - [ ] Validate on Jetson / Orin
