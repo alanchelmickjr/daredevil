@@ -186,7 +186,10 @@ class Pipeline:
             identity = None
             identifying = None
 
-            if src.truth is not None or is_speech_quality(src.audio, src.sr):
+            th = self.config.thresholds
+            if src.truth is not None or is_speech_quality(
+                    src.audio, src.sr,
+                    energy_gate=th.speech_gate_energy, zcr_gate=th.speech_gate_zcr):
                 match = self.enrollment.match(emb, energy=energy, key=track_id)
 
             if match is None:
