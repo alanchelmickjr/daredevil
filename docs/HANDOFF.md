@@ -54,6 +54,34 @@ the SPRT working, not a failure.
 The SPRT accumulator is in-memory and re-accumulates each session from the
 persisted voiceprint — identity memory persists, recognition evidence restarts.
 
+## Platform notes — why macOS is different (read before laptop testing)
+
+Two things behave unlike a Jetson / USB array / robot base. Neither is a Mac
+weakness — it's policy + ecosystem.
+
+**No raw mic channels from the built-in array.** The MacBook has ~3 bezel mics,
+but macOS consumes the raw per-mic channels inside CoreAudio's own DSP
+(beamforming + Voice Isolation + AEC) and hands every app a single *processed
+mono* stream. Reasons: privacy (raw multichannel enables non-consensual spatial
+localization), consistent quality, and the array geometry/beamformer are Apple
+IP. So **WHERE is unavailable on the built-in mic by design** — not a bug.
+It is *not* a Mac limitation: a class-compliant **USB UAC2 multichannel array**
+(ReSpeaker, or our hardware module) is passed through raw, all channels intact.
+That's the symmetry in `audio/capture.py` — the module presents as a USB-C UAC2
+device, so the live path is identical to a laptop and WHERE comes back the moment
+real array hardware is plugged in.
+
+**GPU exists, but the ML path has gaps.** There is no CUDA on a Mac (Apple dropped
+NVIDIA). The GPU is reachable via Metal / PyTorch **MPS**, but MPS has incomplete
+op coverage — SpeechBrain/PANNs kernels can error or silently fall back to CPU.
+The Neural Engine (ANE), Apple's best accelerator, is only reachable through
+**CoreML**, not raw PyTorch. So "GPU like my other devices" doesn't hold: other
+devices are CUDA (the ecosystem's first-class target); the Mac path is
+Metal/MPS/CoreML. This is why the acceleration plan (docs/MODELS.md) is
+reference-torch → ONNX Runtime with a CoreML execution provider — that's the
+route to both the Mac GPU and the ANE. For WHO at 1s windows, CPU is fine, so
+none of this blocks identification testing.
+
 ## Changes on this branch (`claude/daredevil-macbook-testing-*`)
 
 1. **Fixed the live-mic WHO blocker.** `is_speech_quality` had a hardcoded
