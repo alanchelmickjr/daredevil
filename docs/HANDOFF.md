@@ -7,8 +7,14 @@ state and the place to start a session.
 
 - **Core runs on the stdlib alone.** `pip install daredevil` with no extras
   imports and runs the full pipeline; every heavy backend is optional, lazy, and
-  guarded with a deterministic fallback. `python -m pytest -q` → 32 passing on
+  guarded with a deterministic fallback. `python -m pytest -q` → 38 passing on
   stdlib.
+- **Onboarding — "pick me out of the crowd."** `daredevil onboard` is the fun,
+  anywhere first run: it learns your voice and your name, then plays a crowd of
+  other voices and picks YOU out, by name. Live (mic + crowd out the speakers) or a
+  labeled-SYNTHETIC walkthrough with the *same* real cosine-SPRT recognition. The
+  crowd is generated DSP (`audio/crowd.py`), never a recording. See
+  `docs/ONBOARDING.md`.
 - **The four-stage pipeline** (spatial → parallel slot bank → attention router)
   produces a stable awareness-map dict. Synthetic demo is clean:
   `python -m daredevil.demo`.
@@ -139,6 +145,7 @@ while the working code sat scattered. They are now consolidated onto one line:
 ## CLI reference
 
 ```
+daredevil onboard [--live] [--name N] [--crowd K]        fun first run: pick-you-out-of-a-crowd
 daredevil demo [--live|--file W] [--fallback] [--json]   end-to-end demo
 daredevil enroll --name N [--live] [-s SECONDS]          enroll a speaker (persistent)
 daredevil wake [--phrase P] [--live] [-s SECONDS]        teach its name (wake word)

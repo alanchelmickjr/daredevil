@@ -17,7 +17,20 @@
 
 > **Alpha — [MacBook demo ready](#quick-start-macos).**  Identity matching works in noisy rooms. Click a source, get live captions. All local, no cloud.
 
-### Quick start (macOS)
+### Try it in 60 seconds (no setup, no mic needed)
+
+```bash
+git clone https://github.com/alanchelmickjr/daredevil && cd daredevil
+python -m daredevil onboard          # learns your voice, then picks YOU out of a crowd
+python -m daredevil onboard --live   # for real: your mic + the crowd out your speakers
+```
+
+It talks you through learning your voice and your name, then plays a room full of
+other voices and lights *you* up against them — by name. Runs anywhere (no GPU, no
+cloud); without a mic it's a labeled-synthetic walkthrough with the *same* real
+recognition. See [docs/ONBOARDING.md](docs/ONBOARDING.md).
+
+### Full setup (macOS — live HUD + captions)
 
 ```bash
 git clone https://github.com/alanchelmickjr/daredevil && cd daredevil
