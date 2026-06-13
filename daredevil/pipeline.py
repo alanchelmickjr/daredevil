@@ -26,6 +26,7 @@ from .stage1.nmf import SpectralLibrary
 from .stage2.embedding import EmbeddingSlot
 from .stage2.events import EventsSlot
 from .stage2.prosody import ProsodySlot
+from .stage2.wake import WakeWordDetector
 from .stage3.tracker import UnknownTracker
 from .stage3.router import AttentionRouter
 from .enrollment.manager import EnrollmentManager
@@ -75,6 +76,11 @@ class Pipeline:
 
         self.store = make_store(self.config)
         self.enrollment = EnrollmentManager(self.config, self.slots["embedding"], self.store)
+        # Attention by name: the wake detector hears the system's own name and wakes
+        # to whoever called — WHO (above) then says who that caller is.
+        self.wake = WakeWordDetector(self.config.wakeword,
+                                     self.config.resolved_data_dir(),
+                                     phrase=self.config.wake_word)
         self.tracker = UnknownTracker(params=self.config.tracker)
         # Frame-stable spectral features for tracker association (NMF). The tracker
         # uses these to answer "same ongoing sound?" — NOT ECAPA embeddings, which
@@ -93,6 +99,7 @@ class Pipeline:
         self.separator.warmup()
         for slot in self.slots.values():
             slot.warmup()
+        self.wake.warmup()
 
     def devices(self) -> dict:
         return {
@@ -115,6 +122,17 @@ class Pipeline:
 
     def delete(self, name: str) -> None:
         self.enrollment.delete(name)
+
+    def enroll_wake(self, phrase: Optional[str] = None, mic_seconds: float = 2.0,
+                    source: str = "auto", file: Optional[str] = None) -> dict:
+        """Teach Daredevil its name. One spoken example of the wake phrase becomes a
+        spectral contour the by-example detector matches against (no raw audio kept).
+        """
+        phrase = phrase or self.config.wake_word
+        cap = capture(seconds=mic_seconds, sr=self.config.capture_rate,
+                      source=source, file=file, array=self.array)
+        audio = resample(cap.mono, cap.sample_rate, self.config.inference_sr)
+        return self.wake.enroll(audio, self.config.inference_sr, phrase=phrase)
 
     # ----------------------------------------------------------------- listen
     def listen(self, duration: float = 1.0, source: str = "auto",
@@ -177,6 +195,7 @@ class Pipeline:
         # Each layer has one job. No layer tries to do the other's work.
         from .audio.utils import rms as _rms, is_speech_quality
         records = []
+        wake_best = None  # (source_id, score) — the strongest "called me by name" this frame
         for src, res in zip(sources, per_source):
             emb = res.get("embedding", {}).get("vector")
             if emb is None:
@@ -201,10 +220,20 @@ class Pipeline:
             identifying = None
 
             th = self.config.thresholds
-            if src.truth is not None or is_speech_quality(
-                    src.audio, src.sr,
-                    energy_gate=th.speech_gate_energy, zcr_gate=th.speech_gate_zcr):
+            speechy = src.truth is not None or is_speech_quality(
+                src.audio, src.sr,
+                energy_gate=th.speech_gate_energy, zcr_gate=th.speech_gate_zcr)
+            if speechy:
                 match = self.enrollment.match(emb, energy=energy, key=track_id)
+
+            # Attention by name: if this same voice said our name, that's an explicit
+            # bid for attention (the channel humans fall back to when the *sound* of
+            # the voice isn't enough). Detect it on the very window WHO just ran on.
+            wake = None
+            if speechy and self.config.wakeword.enabled and self.wake.ready():
+                w = self.wake.detect(src.audio, src.sr)
+                if w.get("detected"):
+                    wake = w
 
             if match is None:
                 log.info(f"  {track_id} event={ev.get('class')} energy={energy:.4f} "
@@ -229,7 +258,12 @@ class Pipeline:
             records.append({"identity": identity, "identifying": identifying,
                             "unknown_id": track_id,
                             "event": ev, "prosody": pr, "position": pos,
-                            "track_status": t_status})
+                            "track_status": t_status, "wake": wake})
+            if wake is not None:
+                # focus targets the surfaced id (the caller's name if known, else track).
+                source_id = identity["name"] if identity else track_id
+                if wake_best is None or wake["score"] > wake_best[1]:
+                    wake_best = (source_id, wake["score"], wake.get("phrase"))
 
         # Include coasting tracks that weren't seen this frame — they persist
         # on the radar until they age out. Status tells the HUD what to do:
@@ -255,6 +289,17 @@ class Pipeline:
 
         amap = self.router.build(records, datetime.now().isoformat(), timing,
                                  cap.array, self.config.resolved_backend())
+
+        # Wake-by-name summary + the natural response: when called by name, turn
+        # toward the caller (grab focus). WHO already said who that caller is.
+        wake_summary = {"name": self.config.wake_word, "enrolled": self.wake.enrolled(),
+                        "backend": self.wake.backend, "detected": None, "score": 0.0}
+        if wake_best is not None:
+            wake_summary.update(detected=wake_best[0], score=wake_best[1], phrase=wake_best[2])
+            if self.config.wakeword.grab_focus:
+                self.config.focus = wake_best[0]
+        amap["wake"] = wake_summary
+
         if return_audio:
             # audio returned transiently for visualization only; never persisted.
             return amap, cap.mono, cap.sample_rate

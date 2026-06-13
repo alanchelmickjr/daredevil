@@ -50,6 +50,21 @@ def _cmd_calibrate(args) -> int:
     return 0
 
 
+def _cmd_wake(args) -> int:
+    pipe = Pipeline()
+    source = "live" if args.live else ("file" if args.file else "synthetic")
+    res = pipe.enroll_wake(phrase=args.phrase, mic_seconds=args.seconds,
+                           source=source, file=args.file)
+    phrase = res.get("phrase")
+    if res.get("ok"):
+        print(f"learned wake word '{phrase}'  ({res['frames']} frames, "
+              f"sample #{res['samples']}, backend={res['backend']})")
+        print("  say it a couple more times for robustness — Daredevil now wakes when called by name.")
+        return 0
+    print(f"could not learn '{phrase}': {res.get('reason')}")
+    return 1
+
+
 def _cmd_devices(args) -> int:
     pipe = Pipeline(warmup=True)
     print(json.dumps(pipe.devices(), indent=2))
@@ -121,6 +136,12 @@ def main(argv=None) -> int:
     pl.add_argument("--file")
     pl.add_argument("--json", action="store_true")
 
+    pwk = sub.add_parser("wake", help="teach Daredevil its name (wake word) so it wakes when called")
+    pwk.add_argument("--phrase", default=None, help="the wake phrase / name (default: config 'Hey Radar')")
+    pwk.add_argument("-s", "--seconds", type=float, default=2.0)
+    pwk.add_argument("--live", action="store_true")
+    pwk.add_argument("--file")
+
     psv = sub.add_parser("serve", help="run the local web HUD (neumorphic-steampunk)")
     psv.add_argument("--port", type=int, default=8770)
     psv.add_argument("--live", action="store_true")
@@ -143,6 +164,8 @@ def main(argv=None) -> int:
         return _cmd_enroll(args)
     if args.cmd == "calibrate":
         return _cmd_calibrate(args)
+    if args.cmd == "wake":
+        return _cmd_wake(args)
     if args.cmd == "listen":
         return _cmd_listen(args)
     if args.cmd == "serve":

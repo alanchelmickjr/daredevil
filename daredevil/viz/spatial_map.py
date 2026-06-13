@@ -37,13 +37,22 @@ def render_ascii(amap: dict) -> str:
         ident = s.get("identity")
         idtxt = f" id={ident['confidence']:.2f}" if ident else ""
         gate = "→LLM" if s.get("attention") == "surface" else "····"
-        lines.append(f"  {flag}[{s['priority']:.2f}] {bar} {gate} {s['id']:<12} "
+        call = "🗣" if s.get("addressed") else " "
+        lines.append(f"  {flag}[{s['priority']:.2f}] {bar} {gate}{call}{s['id']:<12} "
                      f"{ev.get('class','?'):<9} {where:<15} {pr.get('state','?'):<10}{idtxt}")
-        if s.get("priority_override"):
+        if s.get("priority_override") and s["priority_override"] != "ADDRESSED":
             lines.append(f"           └─ OVERRIDE: {s['priority_override']}")
+        if s.get("addressed"):
+            wk = s.get("wake", {})
+            lines.append(f"           └─ called by name '{wk.get('phrase')}' "
+                         f"(match {wk.get('score')}) → focus")
     routed = amap.get("routed_to_llm", [])
     lines.append(f"  attention gate → LLM: {', '.join(routed) if routed else 'nothing'}"
                  "   (others heard, gated out)")
+    wk = amap.get("wake")
+    if wk and wk.get("detected"):
+        lines.append(f"  🗣 woke to its name '{wk.get('name')}' ← {wk['detected']} "
+                     f"(match {wk.get('score')}) — turning to the caller")
     t = amap.get("timing", {})
     # Only report the speedup when a sequential baseline was actually measured.
     # Never synthesize the comparison from a placeholder (it read "0.0× faster").

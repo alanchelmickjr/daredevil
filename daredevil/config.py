@@ -22,6 +22,7 @@ __all__ = [
     "TrackerParams",
     "SeparationParams",
     "NMFParams",
+    "WakeWordParams",
     "SAFETY_CRITICAL_CLASSES",
     "is_safety_critical",
     "detect_backend",
@@ -212,6 +213,28 @@ class NMFParams:
     decompose_iters: int = 50     # NMF iterations when decomposing a frame
 
 
+@dataclass
+class WakeWordParams:
+    """The 'use their name' channel of attention (see stage2/wake.py).
+
+    Humans grab attention first by the *sound* of the voice (urgency/distress —
+    handled by prosody + the router's DISTRESS escalation) and, when that doesn't
+    land, by *name*. These tune the by-example name detector; openWakeWord upgrades
+    it when ``oww_model`` is set and the package is installed (no cloud, no key).
+    """
+
+    enabled: bool = True
+    analysis_sr: int = 8000        # contour analysis rate (phonetic detail lives < 4 kHz)
+    frame_ms: float = 25.0         # per-frame analysis window
+    hop_ms: float = 10.0           # frame step
+    n_bands: int = 12              # log-spaced spectral bands per frame
+    threshold: float = 0.72        # by-example DTW similarity at/above which the name fires
+    min_phrase_s: float = 0.30     # reject enrollments shorter than a plausible name
+    grab_focus: bool = True        # on hearing its name, focus the caller — the natural response
+    oww_model: str = ""            # optional openWakeWord model name ("" => by-example only)
+    oww_threshold: float = 0.5     # openWakeWord score at/above which the name fires
+
+
 def default_data_dir() -> Path:
     """Where enrolled voiceprints live by default.
 
@@ -314,8 +337,8 @@ class Config:
     # behaviour
     allow_cloud: bool = False      # hard guarantee: no network egress for inference
 
-    # focus control
-    wake_word: str = "Hey Radar"   # local wake word (openWakeWord) to grab/steer focus
+    # focus control — attention by name (see stage2/wake.py)
+    wake_word: str = "Hey Radar"   # the system's name; hearing it grabs/steers focus
     focus: Optional[str] = None    # active focus hint (azimuth label or source id), if any
 
     # tuning
@@ -325,6 +348,7 @@ class Config:
     tracker: TrackerParams = field(default_factory=TrackerParams)
     separation: SeparationParams = field(default_factory=SeparationParams)
     nmf: NMFParams = field(default_factory=NMFParams)
+    wakeword: WakeWordParams = field(default_factory=WakeWordParams)
 
     # storage / fleet
     data_dir: Optional[str] = None     # None -> default_data_dir()
