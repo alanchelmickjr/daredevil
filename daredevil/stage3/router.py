@@ -58,11 +58,20 @@ class AttentionRouter:
         raw = (w.identity * s_identity + w.event * s_event
                + w.prosody * s_prosody + w.temporal * s_temporal)
 
+        wake = r.get("wake")
+        addressed = bool(wake and wake.get("detected"))
+
+        # Two ways a source earns attention — the way humans do it: by the SOUND of
+        # the voice (a safety-critical event, or an enrolled speaker in distress)
+        # and, when that isn't enough, by NAME (it said the wake word). Being named
+        # is a real bid for attention, so it escalates too — just under true distress.
         priority, override = raw, None
         if ev.get("safety_critical") and ev["confidence"] >= self.th.safety:
             priority, override = 1.0, "SAFETY_CRITICAL"
         elif enrolled and s_prosody >= self.th.distress:
             priority, override = max(raw, 0.85), "DISTRESS"
+        elif addressed:
+            priority, override = max(raw, 0.80), "ADDRESSED"
         priority = max(0.0, min(1.0, priority))
 
         # The attention gate — the whole point. A struct is built for EVERY source,
@@ -72,6 +81,21 @@ class AttentionRouter:
         # tracked, and deliberately NOT sent into the conversation.
         directed = enrolled and ev.get("class") == "speech"
         surfaced = bool(override) or directed or (priority >= self.th.surface)
+
+        # Why are we paying attention? Hand the reason to the LLM/robot so it can act
+        # naturally — including using a caller's name back when its own voice won't
+        # carry. This mirrors how the attention was earned in the first place.
+        reason = None
+        if override == "SAFETY_CRITICAL":
+            reason = "safety"
+        elif override == "DISTRESS":
+            reason = "voice"          # grabbed us by the *sound* of the voice
+        elif override == "ADDRESSED":
+            reason = "name"           # grabbed us by saying our name
+        elif directed:
+            reason = "owner-speaking"
+        elif surfaced:
+            reason = "salient"
 
         event_out = {"class": ev["class"], "confidence": round(ev["confidence"], 3)}
         if ev.get("safety_critical"):
@@ -100,6 +124,11 @@ class AttentionRouter:
             src["track_status"] = r["track_status"]
         if r.get("identifying"):
             src["identifying"] = r["identifying"]
+        if addressed:
+            src["addressed"] = True
+            src["wake"] = {"phrase": wake.get("phrase"), "score": wake.get("score")}
+        if surfaced and reason:
+            src["attention_reason"] = reason
         return src
 
 

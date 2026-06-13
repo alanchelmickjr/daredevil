@@ -7,7 +7,7 @@ state and the place to start a session.
 
 - **Core runs on the stdlib alone.** `pip install daredevil` with no extras
   imports and runs the full pipeline; every heavy backend is optional, lazy, and
-  guarded with a deterministic fallback. `python -m pytest -q` → 26 passing on
+  guarded with a deterministic fallback. `python -m pytest -q` → 32 passing on
   stdlib.
 - **The four-stage pipeline** (spatial → parallel slot bank → attention router)
   produces a stable awareness-map dict. Synthetic demo is clean:
@@ -15,6 +15,13 @@ state and the place to start a session.
 - **WHO (identification)** is the headline path and is solid: ECAPA voiceprint
   (fallback fingerprint with no torch), Wald SPRT matching accumulated per track,
   CFAR background adaptation, Welford multi-sample enrollment.
+- **Wake word — attention by name.** Daredevil hears its own name and turns to the
+  caller; WHO (above) says who that is. Two backends: a stdlib query-by-example
+  detector (sub-sequence DTW on a spectral contour, learned from a few spoken
+  examples) and optional openWakeWord (local, no key). `daredevil wake --live` to
+  teach it; the map carries `wake`, `addressed`, and `attention_reason`
+  (`safety|voice|name|owner-speaking|salient`). See `docs/WAKE_WORD.md`. Threshold
+  wants on-mic tuning with a real voice.
 - **Persistent identity.** Enrolled voiceprints are written to
   `~/.daredevil/voiceprints/` (override with `$DAREDEVIL_HOME`). They survive
   process/session restarts: enroll once, recognized on every later run. Verified
@@ -37,6 +44,7 @@ pip install -e ".[speaker,audio]"          # ECAPA + sounddevice (first run down
 export DAREDEVIL_KEY="<any-passphrase>"     # encrypts voiceprints at rest (optional but recommended)
 
 daredevil enroll --name <you> --live -s 10  # 10s of your voice → persistent voiceprint
+daredevil wake --live -s 2                   # say "Hey Radar" 2-3× → it wakes when called
 daredevil listen --live                     # one awareness map to stdout
 daredevil serve --live                      # web HUD at http://127.0.0.1:8770 (best for WHO — it accumulates)
 daredevil devices                           # what was detected / installed
@@ -133,6 +141,7 @@ while the working code sat scattered. They are now consolidated onto one line:
 ```
 daredevil demo [--live|--file W] [--fallback] [--json]   end-to-end demo
 daredevil enroll --name N [--live] [-s SECONDS]          enroll a speaker (persistent)
+daredevil wake [--phrase P] [--live] [-s SECONDS]        teach its name (wake word)
 daredevil calibrate [--name N] [--live] [--others]       seed the identity model
 daredevil listen [--live|--file W] [--json]              emit one awareness map
 daredevil serve [--live] [--port 8770]                   local web HUD
