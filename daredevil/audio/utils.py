@@ -94,7 +94,8 @@ def spectral_centroid(signal: Sequence[float], sr: int) -> float:
     return sum(f * m for f, m in zip(freqs, mags)) / total
 
 
-def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
+def is_speech_quality(audio: Sequence[float], sr: int,
+                      min_energy: float = 0.004, max_zcr: float = 3000.0) -> bool:
     """Energy + ZCR gate for speech quality. Modeled on WebRTC VAD mode 0.
 
     Production systems (Silero, pyannote, SpeechBrain) all gate on energy
@@ -102,17 +103,24 @@ def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
     No spectral tilt — real speech through a laptop mic in a noisy room
     doesn't have clean spectral characteristics.
 
+    The energy floor mirrors the model's VAD threshold (Config.Thresholds.vad):
+    a frame only has to clear "someone is speaking" to be *eligible* — the SPRT
+    then down-weights quiet frames via EnrollmentManager._frame_quality. The
+    floor and the ZCR ceiling are passed in from config, not hardcoded, so one
+    tunable governs the energy decision. (A previously hardcoded 0.05 RMS floor
+    silently rejected normal laptop-mic speech, so WHO never fired on live mic.)
+
     Non-speech frames are non-evidence — they don't vote in the SPRT.
     """
     n = len(audio)
     if n < 100:
         return False
     energy = (sum(x * x for x in audio) / n) ** 0.5
-    if energy < 0.05:
+    if energy < min_energy:
         return False
     zcr = sum(1 for i in range(1, n) if audio[i - 1] * audio[i] < 0)
     zcr_rate = zcr * sr / n
-    if zcr_rate > 3000:
+    if zcr_rate > max_zcr:
         return False
     return True
 

@@ -103,6 +103,7 @@ class Thresholds:
     distress: float = 0.60         # T_distress — prosodic distress that escalates priority
     unknown_track: float = 0.65    # cosine to consider two unknown frames the same source
     vad: float = 0.004             # energy gate for "is anyone speaking"
+    speech_zcr_max: float = 3000.0 # max zero-crossing rate (Hz) for a frame to read as speech, not hiss/click
     enroll_tau: float = 3.0        # tau_enroll — enrollment confidence time constant (s)
     surface: float = 0.45          # priority at/above which a source is routed to the LLM
     display: float = 0.5            # centroid confidence below which a source is hidden from HUD

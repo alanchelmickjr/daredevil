@@ -119,7 +119,7 @@ class Pipeline:
     # ----------------------------------------------------------------- listen
     def listen(self, duration: float = 1.0, source: str = "auto",
                file: Optional[str] = None, return_audio: bool = False,
-               scene: Optional[list] = None):
+               scene: Optional[list] = None, measure_sequential: bool = False):
         self.warmup()
         cap = capture(seconds=duration, sr=self.config.capture_rate,
                       source=source, file=file, array=self.array, scene=scene)
@@ -157,6 +157,20 @@ class Pipeline:
                 per_source.append({n: f.result() for n, f in futs.items()})
         parallel_ms = (time.perf_counter() - t0) * 1000
 
+        # Optional honest baseline: run the same slots sequentially (timing only,
+        # results discarded) so the parallel/sequential comparison reported to the
+        # demo is *measured*, never invented. Off by default — a real-time listen
+        # does not pay for a second pass. Pure-Python is GIL-bound, so expect ~1x
+        # here; the speedup widens once native backends release the GIL.
+        sequential_ms = None
+        if measure_sequential:
+            ts = time.perf_counter()
+            for src in sources:
+                ctx = {"truth": src.truth}
+                for s in self.slots.values():
+                    self._run_slot(s, src.audio, src.sr, ctx)
+            sequential_ms = (time.perf_counter() - ts) * 1000
+
         # --- assemble per-source records.
         # Sonar pattern: DETECT (energy gate) → TRACK (NMF features, bearing) →
         # CLASSIFY (SPRT on ECAPA embedding, keyed by stable track_id).
@@ -186,7 +200,10 @@ class Pipeline:
             identity = None
             identifying = None
 
-            if src.truth is not None or is_speech_quality(src.audio, src.sr):
+            if src.truth is not None or is_speech_quality(
+                    src.audio, src.sr,
+                    min_energy=self.config.thresholds.vad,
+                    max_zcr=self.config.thresholds.speech_zcr_max):
                 match = self.enrollment.match(emb, energy=energy, key=track_id)
 
             if match is None:
@@ -234,7 +251,7 @@ class Pipeline:
         self.enrollment.retain(self.tracker.live_ids())
 
         timing = {"parallel_ms": round(parallel_ms, 1),
-                  "sequential_ms": 0}
+                  "sequential_ms": round(sequential_ms, 1) if sequential_ms is not None else None}
 
         amap = self.router.build(records, datetime.now().isoformat(), timing,
                                  cap.array, self.config.resolved_backend())

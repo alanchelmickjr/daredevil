@@ -79,9 +79,11 @@ def run_demo(args: argparse.Namespace) -> int:
     _audio = _sr = None
     if args.spectrogram:
         amap, _audio, _sr = pipe.listen(duration=args.duration, source=listen_source,
-                                        file=args.file, return_audio=True)
+                                        file=args.file, return_audio=True,
+                                        measure_sequential=True)
     else:
-        amap = pipe.listen(duration=args.duration, source=listen_source, file=args.file)
+        amap = pipe.listen(duration=args.duration, source=listen_source, file=args.file,
+                           measure_sequential=True)
 
     print("── AWARENESS MAP (this is what the LLM receives) " + "─" * 14)
     print(json.dumps(amap, indent=2))
