@@ -143,3 +143,36 @@ class _Arr:
     name = "test"
     n_mics = 3
     spatial_capable = True
+
+
+def test_speech_gate_passes_quiet_speech():
+    """The SPRT speech gate must admit normal-distance laptop speech.
+
+    A hardcoded 0.05 RMS floor once muted identification for anyone not
+    leaning into the mic (speech at arm's length is typically 0.005-0.03 RMS).
+    The gate values are config tunables now; quiet-but-real speech must vote.
+    """
+    from daredevil.audio.utils import is_speech_quality
+
+    sr = 16000
+    # Voiced-speech stand-in: 150 Hz fundamental + harmonics at 0.02 RMS —
+    # below the old 0.05 floor, above the configured 0.012 default.
+    n = sr  # 1 second
+    voiced = [(math.sin(2 * math.pi * 150 * t / sr)
+               + 0.5 * math.sin(2 * math.pi * 300 * t / sr)
+               + 0.25 * math.sin(2 * math.pi * 600 * t / sr)) for t in range(n)]
+    rms = math.sqrt(sum(x * x for x in voiced) / n)
+    quiet = [x * (0.02 / rms) for x in voiced]
+
+    th = Config().thresholds
+    assert is_speech_quality(quiet, sr, energy_gate=th.speech_gate_energy,
+                             zcr_gate=th.speech_gate_zcr)
+    # Sanity on the other side of the gate: silence is not evidence.
+    assert not is_speech_quality([0.0] * n, sr, energy_gate=th.speech_gate_energy,
+                                 zcr_gate=th.speech_gate_zcr)
+    # Clicks/noise: energetic but far above any voiced zero-crossing rate.
+    clicks = [0.2 if t % 2 else -0.2 for t in range(n)]
+    assert not is_speech_quality(clicks, sr, energy_gate=th.speech_gate_energy,
+                                 zcr_gate=th.speech_gate_zcr)
+    # The tunables exist and keep the documented relationship to the VAD floor.
+    assert th.speech_gate_energy > th.vad
