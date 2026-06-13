@@ -8,6 +8,7 @@ priority sum) so the software and the firmware speak the same language.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -103,6 +104,8 @@ class Thresholds:
     distress: float = 0.60         # T_distress — prosodic distress that escalates priority
     unknown_track: float = 0.65    # cosine to consider two unknown frames the same source
     vad: float = 0.004             # energy gate for "is anyone speaking"
+    speech_gate_energy: float = 0.012  # RMS floor for SPRT-grade speech (≈3× vad; 0.05 muted normal-distance talk)
+    speech_gate_zcr: float = 3000.0    # max zero-crossings/s — above this it's clicks/noise, not voice
     enroll_tau: float = 3.0        # tau_enroll — enrollment confidence time constant (s)
     surface: float = 0.45          # priority at/above which a source is routed to the LLM
     display: float = 0.5            # centroid confidence below which a source is hidden from HUD
@@ -223,11 +226,26 @@ def calibration_path(data_dir) -> Path:
     return Path(data_dir) / "calibration.json"
 
 
+# Below this voice/background separability (d′) a saved calibration carries no
+# usable signal — using it would make the matcher reject the very person it should
+# recognize, so we fall back to the (more separable) textbook defaults instead.
+CALIBRATION_MIN_DPRIME = 0.5
+
+
+def _calibration_dprime(m: "IdentityModel") -> float:
+    """Separability (d′) between the target and background cosine distributions."""
+    denom = ((m.target_std ** 2 + m.impostor_std ** 2) / 2.0) ** 0.5
+    if denom <= 0:
+        return 0.0
+    return (m.target_mean - m.impostor_mean) / denom
+
+
 def load_calibration(data_dir) -> Optional["IdentityModel"]:
     """Load a human-seeded IdentityModel from <data_dir>/calibration.json, if present.
 
-    Returns None when there is no calibration file (cold start uses defaults). The
-    file is written by the onboarding session (`daredevil calibrate`).
+    Returns None when there is no calibration file (cold start uses defaults), or
+    when the saved model is degenerate. The file is written by the onboarding
+    session (`daredevil calibrate`).
     """
     p = calibration_path(data_dir)
     if not p.exists():
@@ -235,9 +253,21 @@ def load_calibration(data_dir) -> Optional["IdentityModel"]:
     try:
         d = json.loads(p.read_text())
         fields = IdentityModel.__dataclass_fields__
-        return IdentityModel(**{k: v for k, v in d.items() if k in fields})
+        model = IdentityModel(**{k: v for k, v in d.items() if k in fields})
     except Exception:
         return None
+    # A calibration fit while the mic was broken (silence/dropped audio) can have no
+    # real voice/background separation. Running it is worse than the defaults — it can
+    # make WHO reject the enrolled owner. Ignore it (and say so) rather than fail
+    # silently: a protection system that silently fails is worse than none.
+    sep = _calibration_dprime(model)
+    if sep < CALIBRATION_MIN_DPRIME:
+        logging.getLogger("daredevil").warning(
+            "ignoring calibration %s: d'=%.2f below %.2f (no usable voice/background "
+            "separation). Using defaults — re-run `daredevil calibrate` once the mic "
+            "is working.", p, sep, CALIBRATION_MIN_DPRIME)
+        return None
+    return model
 
 
 def detect_backend() -> str:

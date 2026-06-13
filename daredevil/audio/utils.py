@@ -94,7 +94,9 @@ def spectral_centroid(signal: Sequence[float], sr: int) -> float:
     return sum(f * m for f, m in zip(freqs, mags)) / total
 
 
-def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
+def is_speech_quality(audio: Sequence[float], sr: int,
+                      energy_gate: float = 0.012,
+                      zcr_gate: float = 3000.0) -> bool:
     """Energy + ZCR gate for speech quality. Modeled on WebRTC VAD mode 0.
 
     Production systems (Silero, pyannote, SpeechBrain) all gate on energy
@@ -103,16 +105,19 @@ def is_speech_quality(audio: Sequence[float], sr: int) -> bool:
     doesn't have clean spectral characteristics.
 
     Non-speech frames are non-evidence — they don't vote in the SPRT.
+    Gate values are config tunables (``Thresholds.speech_gate_energy`` /
+    ``speech_gate_zcr``); callers pass them in. Frames the gate rejects are
+    still tracked — they just don't count as identity evidence.
     """
     n = len(audio)
     if n < 100:
         return False
     energy = (sum(x * x for x in audio) / n) ** 0.5
-    if energy < 0.05:
+    if energy < energy_gate:
         return False
     zcr = sum(1 for i in range(1, n) if audio[i - 1] * audio[i] < 0)
     zcr_rate = zcr * sr / n
-    if zcr_rate > 3000:
+    if zcr_rate > zcr_gate:
         return False
     return True
 

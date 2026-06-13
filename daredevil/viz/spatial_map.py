@@ -45,15 +45,16 @@ def render_ascii(amap: dict) -> str:
     lines.append(f"  attention gate → LLM: {', '.join(routed) if routed else 'nothing'}"
                  "   (others heard, gated out)")
     t = amap.get("timing", {})
+    # Only report the speedup when a sequential baseline was actually measured.
+    # Never synthesize the comparison from a placeholder (it read "0.0× faster").
+    seq = t.get("sequential_ms")
     speed = ""
-    try:
-        if t.get("parallel_ms"):
-            speed = f"   →  {t['sequential_ms'] / max(t['parallel_ms'], 0.001):.1f}× faster"
-    except Exception:
-        speed = ""
+    if t.get("parallel_ms") and seq:
+        speed = f"   →  {seq / max(t['parallel_ms'], 0.001):.1f}× faster"
+    seq_str = f"{seq}ms" if seq else "not measured"
     lines.append("  " + "─" * 58)
     lines.append(f"  timing: parallel {t.get('parallel_ms','?')}ms  vs  "
-                 f"sequential {t.get('sequential_ms','?')}ms{speed}")
+                 f"sequential {seq_str}{speed}")
     lines.append("  privacy: on-device · no cloud · embeddings non-reversible")
     lines.append(_RULE)
     return "\n".join(lines)
