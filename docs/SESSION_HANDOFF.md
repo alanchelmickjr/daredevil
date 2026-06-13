@@ -6,13 +6,15 @@ already pushed to branch **`claude/intelligent-gates-mpyqe1`**, so a `git pull` 
 ## The immediate goal
 
 Get the **live HUD** running on the Mac and watch it pick the user out against the
-room (TV / AirPods Max session):
+room (TV / AirPods Max session).
 
 ```bash
-cd ~/<path>/daredevil
-git fetch origin && git checkout claude/intelligent-gates-mpyqe1 && git pull
-pip install -e ".[audio]"          # adds sounddevice — REQUIRED for a real mic
-python -m daredevil serve --live   # → http://127.0.0.1:8770
+cd ~/daredevil
+git fetch origin
+git checkout claude/intelligent-gates-mpyqe1
+git pull
+pip install -e ".[audio]"
+python -m daredevil serve --live
 ```
 
 Then open **http://127.0.0.1:8770**. Tail/host it for the user and say when it's ready.
@@ -30,9 +32,8 @@ Then open **http://127.0.0.1:8770**. Tail/host it for the user and say when it's
 - **The "crowd" needs to be out loud in the room.** If TV/crowd audio is playing *into
   the AirPods*, the built-in mic hears silence and it'll just track the user (no crowd
   effect). For the cocktail-party demo: either put the **TV on the room speakers**
-  (real other-voices → click the TV source in the HUD for captions, watch the user stay
-  surfaced while the TV is gated), or for `onboard --live` set system **output to the
-  laptop speakers** so the synthetic crowd is in the room, not in the ears.
+  (real other-voices), or for `onboard --live` set system **output to the laptop
+  speakers** so the synthetic crowd is in the room, not in the ears.
 
 ## What's on this branch (this session's work)
 
@@ -57,20 +58,19 @@ Then open **http://127.0.0.1:8770**. Tail/host it for the user and say when it's
 ## How to test each thing locally
 
 ```bash
-python -m pytest -q                 # 38 passing on stdlib alone
-python -m daredevil onboard         # synthetic arc end-to-end (no mic needed)
-python -m daredevil onboard --live  # real: enroll, then crowd out the speakers
-python -m daredevil enroll --name <you> --live -s 10
+python -m pytest -q
+python -m daredevil onboard
+python -m daredevil onboard --live
+python -m daredevil enroll --name alan --live -s 10
 python -m daredevil wake --live -s 2
-python -m daredevil serve --live    # the HUD
+python -m daredevil serve --live
 ```
 
 ## State / open items
 
-- Branch is **4 commits ahead of `main`** (wake + 3 onboarding). **NOT merged to main** —
-  the user wants to test live first. Don't merge without an explicit ask.
+- Branch is **5 commits ahead of `main`** (wake + 3 onboarding + handoff). **NOT merged
+  to main** — test live first. Don't merge without an explicit ask.
 - Optional upgrades: `pip install -e ".[speaker]"` swaps the heuristic voiceprint for
-  real ECAPA (better WHO); `[events]`, `[prosody]`, `[spatial]` upgrade the other slots;
-  README's macOS path adds whisper-cpp/llama-cpp for live captions in the HUD.
+  real ECAPA (better WHO). Other extras: `[events]`, `[prosody]`, `[spatial]`, `[viz]`.
 - Tuning that needs the real room: wake threshold and crowd volume (both surfaced on
   screen during `onboard`/`wake`).
