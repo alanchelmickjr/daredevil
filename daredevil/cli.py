@@ -65,6 +65,12 @@ def _cmd_wake(args) -> int:
     return 1
 
 
+def _cmd_onboard(args) -> int:
+    from .onboard import onboard
+    return onboard(name=args.name, live=args.live, crowd=args.crowd,
+                   windows=args.windows, seconds=args.seconds)
+
+
 def _cmd_devices(args) -> int:
     pipe = Pipeline(warmup=True)
     print(json.dumps(pipe.devices(), indent=2))
@@ -136,6 +142,13 @@ def main(argv=None) -> int:
     pl.add_argument("--file")
     pl.add_argument("--json", action="store_true")
 
+    pob = sub.add_parser("onboard", help="the fun first run: talk to it, then it picks you out of a crowd")
+    pob.add_argument("--name", default=None, help="your name (default: 'you')")
+    pob.add_argument("--live", action="store_true", help="use the real mic + play the crowd out the speakers")
+    pob.add_argument("--crowd", type=int, default=4, help="how many other voices to put in the room")
+    pob.add_argument("--windows", type=int, default=5, help="how many listen windows in the reveal")
+    pob.add_argument("-s", "--seconds", type=float, default=8.0, help="enrollment length (s)")
+
     pwk = sub.add_parser("wake", help="teach Daredevil its name (wake word) so it wakes when called")
     pwk.add_argument("--phrase", default=None, help="the wake phrase / name (default: config 'Hey Radar')")
     pwk.add_argument("-s", "--seconds", type=float, default=2.0)
@@ -164,6 +177,8 @@ def main(argv=None) -> int:
         return _cmd_enroll(args)
     if args.cmd == "calibrate":
         return _cmd_calibrate(args)
+    if args.cmd == "onboard":
+        return _cmd_onboard(args)
     if args.cmd == "wake":
         return _cmd_wake(args)
     if args.cmd == "listen":
