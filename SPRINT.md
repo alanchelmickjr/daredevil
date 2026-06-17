@@ -309,26 +309,77 @@ Dexter's dual SO-100 arms can *sign back*. The robot becomes a bridge.
 - [x] Test: `tests/test_enrollment_http.py`
 - [x] Integration contract: `docs/DEXTER_INTEGRATION.md` (also copied to Chloe repo)
 
-### Still pending
-- `audio/utils.py` has a pending uncommitted edit (energy_floor parameter, 0.05→0.015)
-- Tests: need pytest installed to run (not in base env, in conda daredevil env)
+### Committed (66284dc)
+- [x] All daredevil sprint work committed and tested (28 passing)
+- [x] ONNX backend, active_speaker, HUD responsive, enrollment fix, integration doc
+- [x] energy_floor parameter in utils.py (0.05→0.015)
+
+### Still pending (daredevil side)
+- Export ONNX model on MacBook (see Jetson recipe below)
+- Test `daredevil serve --live` on real mic post-merge
+- Jetson bring-up once SD card recovered
 - Gun fleet code stays in repo but OFF critical path — LocalStore only for Saturday
-- Jetson model: need to confirm JetPack version + which USB mic Alan has
-- CalHack context: noisy venue, many speakers, short enrollment windows
+- STT/Gemma loop is NOT functional — not critical path
+
+### Jetson bring-up recipe (for next Claude or Alan)
+
+**Step 0 — SD card recovery** (separate Linux box with SDK Manager):
+  - 3rd Claude instance working on this now (June 17)
+  - If reflash needed: JetPack 6.x for AGX Orin 64GB
+
+**Step 1 — Export ONNX model on MacBook** (needs conda env with torch+speechbrain):
+```bash
+# On MacBook, in the daredevil conda env:
+conda activate daredevil          # or whatever the env is called
+python scripts/export_ecapa_onnx.py
+# Creates: ~/.daredevil/models/ecapa/ecapa_tdnn.onnx (~20MB)
+```
+
+**Step 2 — Copy model + repo to Jetson:**
+```bash
+scp -r ~/.daredevil/models/ecapa/ jetson:~/.daredevil/models/ecapa/
+# Or: git clone the daredevil repo on Jetson if not already there
+```
+
+**Step 3 — Install daredevil on Jetson:**
+```bash
+# On Jetson:
+cd ~/daredevil                    # or wherever the repo lives
+pip install -e ".[onnx,audio]"    # onnxruntime + numpy + sounddevice + soundfile
+# onnxruntime ARM wheel exists on PyPI for aarch64
+```
+
+**Step 4 — Verify:**
+```bash
+daredevil devices                 # should show: embedding: onnx (not fallback)
+daredevil demo                    # synthetic — should complete clean
+daredevil serve --live            # real mic — open http://jetson:8770 in browser
+```
+
+**Step 5 — Enroll Alan:**
+```bash
+daredevil calibrate --name alan --live
+# Or via HTTP from Dexter: POST /calibrate/start {"name":"alan","seconds":10}
+```
+
+**Step 6 — Dexter integration:**
+```bash
+# On Jetson, in a separate terminal:
+curl http://127.0.0.1:8770/awareness | python -m json.tool
+# Should show sources with type, event, position, identity, active_speaker
+# Dexter polls this endpoint every 1s via dexter_awareness_poller.py
+```
+
+### Context for future sessions
 - Dexter consumes daredevil via HTTP GET, not import — decoupled by network boundary
 - Alan's conda env has all backends (torch MPS, ECAPA, librosa) on MacBook already
-- STT/Gemma loop is NOT functional — code exists but never wired. Not critical path.
 - Dexter (Chloe) has: dual SO-101 arms (6-DOF, Feetech STS3215), OAK-D Pro depth camera,
   ReSpeaker v2.0 USB mic (XMOS AEC), XLE head gantry (pan/tilt), HDMI face display,
   omni-wheel base, Jetson AGX Orin 64GB (JP6). Hume EVI3 for voice. MongoDB for memory.
 - Dexter repo: github.com/alanchelmickjr/Chloe-a-Johhny5-robot — separate from daredevil
-- Existing audio tracking: ODAS (odaslive SST on TCP 9001) + ReSpeaker DOA fallback
 - IPC: pub/sub bus in chloe/ipc/bus.py — all modules communicate via Topics
 - Fast dispatch: regex voice commands in chloe/voice/fast_dispatch.py
-- Arm gestures: keyframes in chloe/motion/gestures.py (HOME, WAVE_HELLO, ARMS_UP, DAB, etc.)
-- Face display: CV2 fullscreen on HDMI (chloe/dashboard/display.py) — switchable content
-- The `render_radar_hud()` in viz/spatial_map.py already does the orbital radar aesthetic
-- Web HUD at `/` already exists (neumorphic-steampunk style)
-- LinkedIn connector: simplest path is QR code on face display, no API needed
+- LinkedIn connector: QR code on face display — Dexter side already wired (Day 2 done)
 - Arm choreography lives in Dexter repo, daredevil just provides the trigger data
   via the awareness map fields (type, event, priority_override, attention)
+- Dexter Claude finished Day 1+2 ahead of schedule (commit f5e39f3), starting Day 3
