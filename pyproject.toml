@@ -31,14 +31,16 @@ dependencies = []
 audio = ["sounddevice", "soundfile"]
 spatial = ["numpy", "scipy", "pyroomacoustics"]
 speaker = ["torch", "torchaudio", "speechbrain"]          # Slot A — WHO (ECAPA, Apache-2.0)
+onnx = ["onnxruntime", "numpy"]                           # Slot A — WHO (ECAPA ONNX, for ARM/edge)
 events = ["panns-inference", "numpy", "librosa"]          # Slot B — WHAT (PANNs CNN14)
 prosody = ["librosa", "numpy"]                            # Slot C — HOW (permissive)
 viz = ["matplotlib"]
 crypto = ["cryptography"]                                 # AES at-rest for voiceprints
 mcp = ["mcp"]                                             # MCP server for Claude / LLM agents
 full = [
-    "numpy", "scipy", "torch", "torchaudio", "speechbrain", "panns-inference",
-    "librosa", "pyroomacoustics", "sounddevice", "soundfile", "matplotlib", "cryptography", "mcp",
+    "numpy", "scipy", "torch", "torchaudio", "speechbrain", "onnxruntime",
+    "panns-inference", "librosa", "pyroomacoustics", "sounddevice", "soundfile",
+    "matplotlib", "cryptography", "mcp",
 ]
 dev = ["pytest"]
 

@@ -179,6 +179,7 @@ class _CalibrationSession:
 
     def _do_fit(self):
         from ..calibrate import Calibrator, _dprime_error_pct
+        from ..audio.capture import DEFAULT_SCENE
 
         self.status["phase"] = "fitting"
         cal = Calibrator(self.pipe)
@@ -186,6 +187,21 @@ class _CalibrationSession:
         cal.save(model)
         err = _dprime_error_pct(dprime)
         quality = "good" if dprime >= 2.5 else ("fair" if dprime >= 1.5 else "poor")
+
+        # In synthetic mode, add the newly enrolled person to the scene so
+        # the awareness map shows them as type="enrolled" after calibration.
+        if not self.state.live and self._name:
+            scene = list(DEFAULT_SCENE)
+            # Add the calibrated person if they aren't already in the scene.
+            names_in_scene = {s.get("name") for s in scene}
+            if self._name not in names_in_scene:
+                scene.insert(0, {
+                    "name": self._name, "enrolled": True, "class": "speech",
+                    "azimuth": 10.0, "elevation": 0.0,
+                    "prosody_state": "calm", "distress": 0.10,
+                })
+            self.state._scene = scene
+
         self.status.update({
             "active": False,
             "phase": "done", "dprime": round(dprime, 2), "error_pct": err,
@@ -208,6 +224,7 @@ class _State:
         self._transcript = None
         self._llm_response = None
         self._stt_thread = None
+        self._scene = None  # custom synthetic scene; None = DEFAULT_SCENE
         from .transcriber import Transcriber
         self.transcriber = Transcriber()
         self.cal = _CalibrationSession(self)
@@ -273,10 +290,28 @@ class _State:
         try:
             # DETECTION — the spine. Always runs, never blocked by transcription.
             amap, audio, sr = self.pipe.listen(duration=1.0, source=self.source,
-                                               return_audio=True)
+                                               return_audio=True,
+                                               scene=self._scene)
             amap["wake_word"] = self.pipe.config.wake_word
             amap["focus"] = self._focus_id
             amap["top_llr"] = self.pipe.enrollment.top_llr()
+
+            # active_speaker: the highest-priority enrolled source currently
+            # speaking. Dexter uses this to know WHO is talking right now
+            # without parsing the full sources array.
+            active = None
+            for s in amap.get("sources", []):
+                if (s.get("type") == "enrolled"
+                        and s.get("attention") == "surface"
+                        and s.get("event", {}).get("class") == "speech"):
+                    if active is None or s["priority"] > active["priority"]:
+                        active = s
+            amap["active_speaker"] = {
+                "id": active["id"],
+                "confidence": active.get("identity", {}).get("confidence", 0),
+                "azimuth": active.get("position", {}).get("azimuth"),
+                "priority": active["priority"],
+            } if active else None
 
             # Surface any previously-completed STT/LLM results.
             if self._transcript:

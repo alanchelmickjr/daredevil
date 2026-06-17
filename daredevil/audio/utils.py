@@ -99,11 +99,6 @@ def is_speech_quality(audio: Sequence[float], sr: int,
                       zcr_gate: float = 3000.0) -> bool:
     """Energy + ZCR gate for speech quality. Modeled on WebRTC VAD mode 0.
 
-    Production systems (Silero, pyannote, SpeechBrain) all gate on energy
-    with hysteresis. We use energy threshold + ZCR to reject clicks/noise.
-    No spectral tilt — real speech through a laptop mic in a noisy room
-    doesn't have clean spectral characteristics.
-
     Non-speech frames are non-evidence — they don't vote in the SPRT.
     Gate values are config tunables (``Thresholds.speech_gate_energy`` /
     ``speech_gate_zcr``); callers pass them in. Frames the gate rejects are
