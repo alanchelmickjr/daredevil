@@ -13,8 +13,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 from typing import Optional
+
+log = logging.getLogger("daredevil.crypto")
 
 
 def have_crypto() -> bool:
@@ -22,6 +25,7 @@ def have_crypto() -> bool:
         import cryptography.fernet  # noqa: F401
         return True
     except Exception:
+        log.debug("cryptography not available — voiceprints stored unencrypted")
         return False
 
 

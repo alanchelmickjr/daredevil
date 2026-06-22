@@ -14,6 +14,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
+log = logging.getLogger("daredevil.config")
+
 __all__ = [
     "Config",
     "PriorityWeights",
@@ -23,6 +25,8 @@ __all__ = [
     "SeparationParams",
     "NMFParams",
     "WakeWordParams",
+    "HeuristicThresholds",
+    "SyntheticParams",
     "SAFETY_CRITICAL_CLASSES",
     "is_safety_critical",
     "detect_backend",
@@ -235,6 +239,59 @@ class WakeWordParams:
     oww_threshold: float = 0.5     # openWakeWord score at/above which the name fires
 
 
+@dataclass
+class HeuristicThresholds:
+    """Thresholds for the fallback heuristic event classifier (Slot B) and
+    prosody distress calculation (Slot C). Centralised here so no magic
+    numbers live in the slot files."""
+
+    # events.py heuristic
+    silence_energy: float = 0.01
+    baby_cry_centroid_hz: float = 1500.0
+    baby_cry_zcr: float = 0.20
+    alarm_centroid_hz: float = 800.0
+    speech_centroid_hz: float = 500.0
+    speech_zcr: float = 0.18
+
+    # prosody.py distress weights (must sum to 1.0)
+    distress_w_f0: float = 0.45
+    distress_w_jitter: float = 0.30
+    distress_w_roughness: float = 0.25
+
+    # prosody.py state thresholds
+    state_distressed: float = 0.60
+    state_stressed: float = 0.40
+    state_confused_f0_std: float = 0.70
+
+    # prosody.py stdlib proxy normalisation
+    centroid_norm_hz: float = 2000.0
+
+    # speech quality gate (utils.py)
+    speech_energy_floor: float = 0.015
+
+    # calibrate.py audio level feedback
+    level_too_quiet: float = 0.01
+    level_too_hot: float = 0.40
+
+
+@dataclass
+class SyntheticParams:
+    """Constants for deterministic synthetic audio generation (capture.py).
+    Centralised so they're visible and tunable in one place."""
+
+    voice_noise_floor: float = 0.02
+    ambient_noise_floor: float = 0.05
+
+    # PANNs model target sample rate
+    panns_sr: int = 32000
+    # ConvTasNet training sample rate
+    convtasnet_sr: int = 8000
+
+    # SRP-PHAT FFT parameters (spatial.py)
+    srp_fft_size: int = 1024
+    srp_hop_size: int = 512
+
+
 def default_data_dir() -> Path:
     """Where enrolled voiceprints live by default.
 
@@ -278,6 +335,7 @@ def load_calibration(data_dir) -> Optional["IdentityModel"]:
         fields = IdentityModel.__dataclass_fields__
         model = IdentityModel(**{k: v for k, v in d.items() if k in fields})
     except Exception:
+        log.debug("calibration file %s unreadable, starting fresh", p)
         return None
     # A calibration fit while the mic was broken (silence/dropped audio) can have no
     # real voice/background separation. Running it is worse than the defaults — it can
@@ -285,7 +343,7 @@ def load_calibration(data_dir) -> Optional["IdentityModel"]:
     # silently: a protection system that silently fails is worse than none.
     sep = _calibration_dprime(model)
     if sep < CALIBRATION_MIN_DPRIME:
-        logging.getLogger("daredevil").warning(
+        log.warning(
             "ignoring calibration %s: d'=%.2f below %.2f (no usable voice/background "
             "separation). Using defaults — re-run `daredevil calibrate` once the mic "
             "is working.", p, sep, CALIBRATION_MIN_DPRIME)
@@ -303,16 +361,21 @@ def detect_backend() -> str:
     try:
         import torch  # noqa: F401
     except Exception:
+        log.debug("torch not available, using fallback backend")
         return "fallback"
     try:
         import torch
 
         if torch.cuda.is_available():
+            log.debug("detected backend: cuda")
             return "cuda"
         if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            log.debug("detected backend: mps")
             return "mps"
+        log.debug("detected backend: cpu (torch present, no GPU)")
         return "cpu"
     except Exception:
+        log.debug("torch probe failed, using fallback backend")
         return "fallback"
 
 
@@ -349,6 +412,8 @@ class Config:
     separation: SeparationParams = field(default_factory=SeparationParams)
     nmf: NMFParams = field(default_factory=NMFParams)
     wakeword: WakeWordParams = field(default_factory=WakeWordParams)
+    heuristic: HeuristicThresholds = field(default_factory=HeuristicThresholds)
+    synth: SyntheticParams = field(default_factory=SyntheticParams)
 
     # storage / fleet
     data_dir: Optional[str] = None     # None -> default_data_dir()

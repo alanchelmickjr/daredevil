@@ -15,6 +15,7 @@ In synthetic mode the scene is labeled SYNTHETIC and the same real math runs.
 """
 from __future__ import annotations
 
+import logging
 import statistics
 from dataclasses import asdict
 from typing import List, Optional, Tuple
@@ -22,6 +23,8 @@ from typing import List, Optional, Tuple
 from .config import Config, IdentityModel, calibration_path
 from .audio.capture import capture
 from .audio.utils import cosine, resample, rms
+
+log = logging.getLogger("daredevil.calibrate")
 
 
 class Calibrator:
@@ -84,6 +87,8 @@ class Calibrator:
         # d-prime: how separable the two distributions are (higher = cleaner).
         denom = ((ts * ts + istd * istd) / 2.0) ** 0.5
         dprime = round((tm - im) / denom, 2) if denom > 0 else 0.0
+        log.info("calibration fit: target=%.3f±%.3f, bg=%.3f±%.3f, d'=%.2f",
+                 tm, ts, im, istd, dprime)
         return model, dprime
 
     def save(self, model: IdentityModel) -> str:
@@ -91,6 +96,7 @@ class Calibrator:
         path = calibration_path(self.cfg.resolved_data_dir())
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(model), indent=2))
+        log.info("calibration saved to %s", path)
         return str(path)
 
 
@@ -109,10 +115,12 @@ _AMBIENT_SCENE = [
 ]
 
 
-def _level_note(level: float) -> str:
-    if level < 0.01:
+def _level_note(level: float, h=None) -> str:
+    from .config import HeuristicThresholds
+    h = h or HeuristicThresholds()
+    if level < h.level_too_quiet:
         return "barely hear you — scoot a little closer"
-    if level > 0.4:
+    if level > h.level_too_hot:
         return "whoa, a touch hot — ease back a hair"
     return "loud and clear"
 

@@ -11,9 +11,12 @@ Coordinates are in metres, (x, y, z), array centroid at the origin.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+log = logging.getLogger("daredevil.mic_arrays")
 
 __all__ = ["MicArray", "SINGLE", "MACBOOK_3", "RESPEAKER_4", "REGISTRY", "detect", "load_coordinate_map"]
 
@@ -110,7 +113,8 @@ def detect(prefer: Optional[str] = None, channels: Optional[int] = None) -> MicA
 
             dev = sd.query_devices(kind="input")
             channels = int(dev.get("max_input_channels", 1)) if isinstance(dev, dict) else 1
-        except Exception:
+        except Exception as e:
+            log.debug("sounddevice query failed: %s", e)
             channels = None
 
     if channels is None:

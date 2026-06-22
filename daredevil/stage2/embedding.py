@@ -16,11 +16,14 @@ A voiceprint is a non-reversible 192-dim vector. Raw audio is never stored.
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional
 
 from .base import Slot
 from ..audio.utils import fingerprint, resample
 from ..config import default_data_dir
+
+log = logging.getLogger("daredevil.embedding")
 
 # Path within the data dir where the exported ONNX model is expected.
 _ONNX_MODEL_SUBPATH = "models/ecapa/ecapa_tdnn.onnx"
@@ -64,6 +67,7 @@ class EmbeddingSlot(Slot):
 
         # Tier 3: pure-Python spectral fingerprint (always available)
         self._backend_name = "fallback"
+        log.info("embedding backend: fallback (spectral fingerprint)")
         self._warm = True
 
     def _try_reference(self) -> bool:
@@ -78,8 +82,10 @@ class EmbeddingSlot(Slot):
             )
             self.dim = 192
             self._backend_name = "reference"
+            log.info("embedding backend: reference (SpeechBrain ECAPA-TDNN)")
             return True
-        except Exception:
+        except Exception as e:
+            log.debug("reference backend unavailable: %s", e)
             self._classifier = None
             return False
 
@@ -99,8 +105,10 @@ class EmbeddingSlot(Slot):
             self._ort_input_name = self._ort_session.get_inputs()[0].name
             self.dim = 192
             self._backend_name = "onnx"
+            log.info("embedding backend: onnx (%s)", model_path)
             return True
-        except Exception:
+        except Exception as e:
+            log.debug("onnx backend unavailable: %s", e)
             self._ort_session = None
             self._ort_input_name = None
             return False
@@ -122,15 +130,15 @@ class EmbeddingSlot(Slot):
                 if isinstance(emb, float):
                     emb = [emb]
                 return {"vector": emb, "dim": len(emb), "backend": "reference"}
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("reference inference failed, falling through: %s", e)
 
         # Tier 2: ONNX Runtime
         if self._ort_session is not None:
             try:
                 return self._run_onnx(audio, sr)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("onnx inference failed, falling through: %s", e)
 
         # Tier 3: deterministic heuristic
         vec = fingerprint(audio, sr, self.dim)

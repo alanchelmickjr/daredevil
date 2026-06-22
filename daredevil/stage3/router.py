@@ -10,9 +10,12 @@ The returned dict is the product: structured context an LLM can consume directly
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional
 
 from ..config import Config
+
+log = logging.getLogger("daredevil.router")
 
 
 class AttentionRouter:
@@ -68,8 +71,11 @@ class AttentionRouter:
         priority, override = raw, None
         if ev.get("safety_critical") and ev["confidence"] >= self.th.safety:
             priority, override = 1.0, "SAFETY_CRITICAL"
+            log.debug("SAFETY_CRITICAL override: %s (class=%s, conf=%.2f)",
+                       ident.get("name") if ident else "unknown", ev["class"], ev["confidence"])
         elif enrolled and s_prosody >= self.th.distress:
             priority, override = max(raw, 0.85), "DISTRESS"
+            log.debug("DISTRESS override: %s (distress=%.2f)", ident["name"], s_prosody)
         elif addressed:
             priority, override = max(raw, 0.80), "ADDRESSED"
         priority = max(0.0, min(1.0, priority))

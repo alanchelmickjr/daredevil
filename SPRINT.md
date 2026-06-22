@@ -2,7 +2,7 @@
 
 **Goal:** Dexter walks CalHack, enrolls people by voice, remembers them,
 connects everyone to Alan on LinkedIn, and uses his dual SO-101 arms +
-OAK-D Pro (+ RealSense) to physically act out demos while he talks.
+RealSense to physically act out demos while he talks.
 
 **Platforms:** Jetson (Dexter's brain) + MacBook (dev/fallback)
 **Contract:** `GET http://127.0.0.1:8770/awareness` → JSON awareness map
@@ -120,7 +120,7 @@ offers to connect them with Alan on LinkedIn.
 
 ---
 
-## Track 4 — PHYSICAL DEMO CHOREOGRAPHY (dual SO-101 arms + OAK-D Pro)
+## Track 4 — PHYSICAL DEMO CHOREOGRAPHY (dual SO-101 arms + RealSense)
 
 Dexter doesn't just talk — he acts. The arms and RealSense make the demo
 physical and memorable.
@@ -225,16 +225,52 @@ Extend the perception layer bidirectionally:
 - **Deaf → Hearing:** RealSense watches sign language, Dexter translates to
   speech. Sign becomes sound.
 
-Dexter's dual SO-100 arms can *sign back*. The robot becomes a bridge.
+Dexter's dual SO-101 arms can *sign back*. The robot becomes a bridge.
+
+### T6.0 — Research findings (June 17)
+
+**Fingerspelling (A-Z static letters):** production-ready. MediaPipe Hands
+(21 landmarks → 63D vector) + a small classifier (RandomForest/MLP or
+MediaPipe Model Maker gesture recognizer) gets ~95% accuracy. Training on
+50–100 images per letter is enough. Refs:
+- MediaPipe Model Maker Gesture Recognizer (Google, exports TFLite)
+- samproell.io ASL detector tutorial (end-to-end with code)
+- Kaggle ASL Fingerspelling 1st place (Squeezeformer + transformer decoder
+  for *continuous* fingerspelling from landmark sequences — stretch goal)
+
+**Isolated sign vocabulary (20–250 signs):** working. Google Kaggle ISLR
+solutions take 543 MediaPipe Holistic landmarks and classify into 250
+common signs. Multiple implementations, TFLite export proven, ~22 FPS.
+Refs: JosephZahar/Google-Isolated-Sign-Language-Recognition-Kaggle,
+TheoViel/kaggle_islr. WLASL dataset: 2000 words, 21K videos.
+
+**Robot signing back:** SO-101 has 6-DOF with no finger articulation, so
+fingerspelling is impossible. Arm-motion-dominant signs are feasible:
+HELLO (wave), THANK-YOU, YES, NO, STOP. Pre-author 5–10 joint
+trajectories, not learned. SignAvatars (ECCV 2024) has 3D keypoint data
+for retargeting if we want more signs later.
+
+**Jetson Orin 64GB performance:** massive overkill. MediaPipe Hands ~25–30
+FPS, TFLite classifier adds negligible latency. End-to-end pipeline
+bottlenecked by camera at 30 FPS, not compute.
+
+**MVP path (1–2 days):**
+1. MediaPipe Hands on RealSense RGB stream
+2. 24-letter static classifier (Model Maker or sklearn on landmarks)
+3. Letters → words on 7" display + pyttsx3 TTS
+4. 5 arm-motion signs pre-choreographed for SO-101
 
 ### T6.1 — Sign language recognition (RealSense + MediaPipe)
-- [ ] MediaPipe Hands → 21 hand landmarks per hand, 30 FPS from RealSense
-- [ ] ASL alphabet classifier (fingerspelling) — simplest starting point
-  - MediaPipe hand landmarks → normalize → classify with a small model
-  - Libraries: `mediapipe`, `opencv-python`, or a pretrained ASL model
-- [ ] Dexter speaks the signed letters/words aloud (TTS)
-- [ ] Stretch: full ASL phrase recognition (not just fingerspelling)
-  - Google's ASL dataset or sign-language-processing/datasets on HuggingFace
+- [ ] `pip install mediapipe opencv-python` on Jetson (community aarch64 wheel)
+- [ ] MediaPipe Hands → 21 landmarks per hand, 25+ FPS from RealSense
+- [ ] ASL fingerspelling classifier (24 static letters):
+  - MediaPipe Model Maker gesture recognizer (TFLite export), OR
+  - sklearn RandomForest/MLP on the 63D landmark vector
+  - Training data: SigNN Kaggle dataset or collect 50–100 images per letter
+- [ ] Letter accumulation + word display on 7" touchscreen
+- [ ] Dexter speaks recognized letters/words via TTS (`pyttsx3` or `espeak`)
+- [ ] Stretch: continuous fingerspelling via Kaggle 1st-place Squeezeformer
+- [ ] Stretch: 20-sign vocabulary via Kaggle ISLR transformer (TFLite)
 
 ### T6.2 — Sound → visual bridge for deaf users
 - [ ] Awareness map rendered as visual alerts on Dexter's face:
@@ -245,9 +281,9 @@ Dexter's dual SO-100 arms can *sign back*. The robot becomes a bridge.
 - [ ] Haptic option: awareness map → vibration patterns (left/right buzzer for direction)
 
 ### T6.3 — Dexter signs back (the moment)
-- [ ] Map simple phrases to SO-100 arm sign language gestures
-  - "Hello" / "Thank you" / "My name is Dexter" / "Nice to meet you"
-  - Pre-choreographed joint trajectories for each sign
+- [ ] Map 5 arm-dominant signs to SO-101 joint trajectories:
+  - HELLO (wave), THANK-YOU (chin-forward), YES (fist nod), NO (finger-close), STOP (palm-out)
+  - 6 waypoints per sign, interpolated — honest about no finger articulation
 - [ ] When Dexter recognizes sign language input, he signs + speaks the response
 - [ ] The bridge: deaf person signs → Dexter translates to speech for hearing people,
   hearing person speaks → Daredevil transcribes → Dexter shows captions for deaf person
@@ -373,7 +409,7 @@ curl http://127.0.0.1:8770/awareness | python -m json.tool
 ### Context for future sessions
 - Dexter consumes daredevil via HTTP GET, not import — decoupled by network boundary
 - Alan's conda env has all backends (torch MPS, ECAPA, librosa) on MacBook already
-- Dexter (Chloe) has: dual SO-101 arms (6-DOF, Feetech STS3215), OAK-D Pro depth camera,
+- Dexter (Chloe) has: dual SO-101 arms (6-DOF, Feetech STS3215), RealSense depth camera,
   ReSpeaker v2.0 USB mic (XMOS AEC), XLE head gantry (pan/tilt), HDMI face display,
   omni-wheel base, Jetson AGX Orin 64GB (JP6). Hume EVI3 for voice. MongoDB for memory.
 - Dexter repo: github.com/alanchelmickjr/Chloe-a-Johhny5-robot — separate from daredevil

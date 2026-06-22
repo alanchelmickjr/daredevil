@@ -12,11 +12,14 @@ All time constants and gates live in ``TrackerParams`` (config).
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import List, Optional, Sequence
 
 from ..audio.utils import cosine
 from ..config import TrackerParams
+
+log = logging.getLogger("daredevil.tracker")
 
 TENTATIVE, CONFIRMED, COASTING = "tentative", "confirmed", "coasting"
 
@@ -90,10 +93,13 @@ class UnknownTracker:
         t["event_class"] = event_class
         t["hits"] += 1
         t["last_seen"] = now
+        prev_status = t["status"]
         if t["hits"] >= self.p.confirm_hits and (now - t["born"]) <= self.p.confirm_window_s:
             t["status"] = CONFIRMED
         elif t["status"] == COASTING:
             t["status"] = CONFIRMED if t["hits"] >= self.p.confirm_hits else TENTATIVE
+        if t["status"] != prev_status:
+            log.debug("track %s: %s -> %s", t["id"], prev_status, t["status"])
 
     def _new(self, feature, az, event_class, position, now) -> str:
         self._counter += 1
@@ -104,13 +110,19 @@ class UnknownTracker:
             "event_class": event_class, "azimuth": az, "az_rate": 0.0,
             "position": position,
         })
+        log.debug("new track %s (class=%s, az=%s)", sid, event_class, az)
         return sid
 
     def _prune(self, now: float) -> None:
         for t in self._tracks:
             if t["status"] != COASTING and (now - t["last_seen"]) > self.p.coast_s:
+                log.debug("track %s -> coasting (silent %.1fs)", t["id"], now - t["last_seen"])
                 t["status"] = COASTING
+        before = len(self._tracks)
         self._tracks = [t for t in self._tracks if (now - t["last_seen"]) <= self.p.delete_s]
+        pruned = before - len(self._tracks)
+        if pruned:
+            log.debug("pruned %d dead track(s), %d remaining", pruned, len(self._tracks))
 
     def prune(self, max_age: Optional[float] = None) -> None:
         self._prune(time.monotonic())

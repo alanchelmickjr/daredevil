@@ -10,10 +10,13 @@ slots analyze each one independently.
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import List, Optional
 
 from ..audio.utils import rms, resample
+
+log = logging.getLogger("daredevil.separation")
 
 
 class Separator:
@@ -43,12 +46,15 @@ class Separator:
                 self._model.eval()
                 self._n_sources = self._model.masker.n_src
                 self._backend_name = "reference"
+                log.info("separation backend: reference (ConvTasNet)")
                 # Warm up JIT
                 with torch.no_grad():
                     self._model(torch.randn(1, self._sample_rate))
-            except Exception:
+            except Exception as e:
+                log.debug("ConvTasNet unavailable: %s", e)
                 self._model = None
                 self._backend_name = "fallback"
+                log.info("separation backend: fallback (pass-through)")
         self._warm = True
 
     def separate(self, audio: List[float], sr: int,
@@ -93,8 +99,8 @@ class Separator:
 
                 if sources:
                     return sources
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("ConvTasNet inference failed, falling through: %s", e)
 
         # Fallback: single source pass-through
         return [{"audio": list(audio), "sr": sr, "energy": rms(audio)}]

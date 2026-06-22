@@ -8,22 +8,26 @@ gunshot...) flip a flag that Stage 3 turns into a priority override.
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional
 
 from .base import Slot
-from ..config import is_safety_critical
+from ..config import is_safety_critical, HeuristicThresholds
 from ..audio.utils import spectral_centroid, zero_crossing_rate, rms
+
+log = logging.getLogger("daredevil.events")
 
 
 class EventsSlot(Slot):
     name = "events"
 
-    def __init__(self, backend: str = "auto"):
+    def __init__(self, backend: str = "auto", heuristic: Optional[HeuristicThresholds] = None):
         super().__init__()
         self._requested = backend
         self._model = None
         self._labels = None
         self._backend_name = "fallback"
+        self._h = heuristic or HeuristicThresholds()
 
     @property
     def backend(self) -> str:
@@ -40,9 +44,12 @@ class EventsSlot(Slot):
                 self._model = AudioTagging(checkpoint_path=None, device="cpu")
                 self._labels = labels
                 self._backend_name = "reference"
-            except Exception:
+                log.info("events backend: reference (PANNs CNN14)")
+            except Exception as e:
+                log.debug("PANNs unavailable: %s", e)
                 self._model = None
                 self._backend_name = "fallback"
+                log.info("events backend: fallback (spectral heuristic)")
         self._warm = True
 
     def run(self, audio: List[float], sr: int, ctx: Optional[Dict] = None) -> dict:
@@ -77,8 +84,8 @@ class EventsSlot(Slot):
                     "safety_critical": is_safety_critical(top["class"]),
                     "topk": topk, "backend": "reference",
                 }
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("PANNs inference failed, falling through: %s", e)
 
         # Fallback heuristic for real audio when no model is loaded.
         klass, conf = self._heuristic(audio, sr)
@@ -89,17 +96,17 @@ class EventsSlot(Slot):
             "backend": "fallback",
         }
 
-    @staticmethod
-    def _heuristic(audio: List[float], sr: int):
+    def _heuristic(self, audio: List[float], sr: int):
+        h = self._h
         energy = rms(audio)
-        if energy < 0.01:
+        if energy < h.silence_energy:
             return "silence", 0.5
         centroid = spectral_centroid(audio, sr)
         zcr = zero_crossing_rate(audio)
-        if centroid > 1500 and zcr > 0.2:
+        if centroid > h.baby_cry_centroid_hz and zcr > h.baby_cry_zcr:
             return "baby_cry", 0.6
-        if centroid > 800:
+        if centroid > h.alarm_centroid_hz:
             return "alarm", 0.55
-        if centroid < 500 and zcr < 0.18:
+        if centroid < h.speech_centroid_hz and zcr < h.speech_zcr:
             return "speech", 0.7
         return "music", 0.5

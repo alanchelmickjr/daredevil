@@ -10,7 +10,10 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+log = logging.getLogger("daredevil.mcp")
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -219,7 +222,8 @@ def _transcribe(audio: list, sr: int) -> str:
              "--no-timestamps", "--no-prints"],
             capture_output=True, text=True, timeout=5)
         return result.stdout.strip()
-    except Exception:
+    except Exception as e:
+        log.debug("whisper-cli transcribe failed: %s", e)
         return ""
     finally:
         Path(tmp.name).unlink(missing_ok=True)

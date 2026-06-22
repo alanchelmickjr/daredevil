@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import abc
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..config import Config, default_data_dir
 from . import crypto
+
+log = logging.getLogger("daredevil.store")
 
 _SAFE = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -62,7 +65,8 @@ class LocalStore(IdentityStore):
         for p in sorted(self.dir.glob("*.json")):
             try:
                 out.append(crypto.decrypt(json.loads(p.read_text()), self.key))
-            except Exception:
+            except Exception as e:
+                log.warning("skipping corrupt voiceprint %s: %s", p, e)
                 continue
         return out
 
@@ -103,8 +107,8 @@ class GunStore(LocalStore):
                 req = urllib.request.Request(peer, data=data,
                                              headers={"Content-Type": "application/json"})
                 urllib.request.urlopen(req, timeout=self.timeout)
-        except Exception:
-            pass  # offline-first: local write already succeeded
+        except Exception as e:
+            log.debug("gun sync failed (offline-first, local write OK): %s", e)
 
 
 def make_store(config: Config) -> IdentityStore:

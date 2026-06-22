@@ -26,11 +26,14 @@ Only non-reversible embedding vectors are persisted — never raw audio.
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..audio.utils import cosine, rms
+
+log = logging.getLogger("daredevil.enrollment")
 
 _LOG_2PI = math.log(2.0 * math.pi)
 
@@ -101,6 +104,8 @@ class EnrollmentManager:
             "backend": self.slot.backend,
         }
         self.store.put(name, record)
+        log.info("enrolled '%s': dim=%d, conf=%.3f, n_samples=%d, backend=%s",
+                 name, len(vec), conf, n_samples, self.slot.backend)
         return {"name": name, "enrollment_confidence": round(conf, 4),
                 "seconds": seconds, "backend": self.slot.backend, "dim": len(vec),
                 "n_samples": n_samples}
@@ -152,6 +157,8 @@ class EnrollmentManager:
         rec["vector"] = [x / norm for x in merged]
         rec["n_samples"] = rec.get("n_samples", 1) + 1
         self.store.put(rec["name"], rec)
+        log.debug("refined voiceprint for '%s' (n_samples=%d, cos=%.3f)",
+                  rec["name"], rec["n_samples"], raw)
 
     def _frame_quality(self, energy: float) -> float:
         """Evidential weight in [0, 1]: silence carries none, loud-enough carries full."""
@@ -217,6 +224,9 @@ class EnrollmentManager:
                 "decided": decided,
                 "enrollment_confidence": rec.get("enrollment_confidence", 1.0),
             }
+            if decided and not was_decided:
+                log.info("SPRT accept: track=%s identified as '%s' (llr=%.2f, cos=%.3f)",
+                         key, name, acc, s)
             if best is None or cand["llr"] > best["llr"]:
                 best = cand
 

@@ -359,7 +359,7 @@ Both Claude agents should:
 |------|--------|------|
 | Jetson | CLAUDE.md says AGX Orin 64GB (JP6). Sprint says Nano 8GB. **Confirm which.** | Orin handles everything; Nano needs ONNX. |
 | Mic | ReSpeaker v2.0 USB (XMOS XVF-3000 AEC, 4-mic circular array) | Daredevil needs ReSpeaker array geometry |
-| Camera | OAK-D Pro (primary) + possibly RealSense (head) | Face detection is Chloe's job, not daredevil's |
+| Camera | Intel RealSense (head) | Face detection is Chloe's job, not daredevil's |
 | Arms | Dual SO-101, 6-DOF, Feetech STS3215, 3 serial buses | Gesture keyframes are Chloe's job |
 | Display | 7" touchscreen via HDMI, GTK WebKit kiosk | Daredevil HUD must render at 1024x600 |
 | Base | iMRP omni-wheel (backwards mount, inverted controls) | |
