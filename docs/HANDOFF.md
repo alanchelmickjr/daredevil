@@ -2,6 +2,7 @@
 
 Daredevil 0.1.0. Read `../CLAUDE.md` first for the rules; this file is the live
 state and the place to start a session.
+For contributor/agent coordination, see [`COLLABORATION.md`](COLLABORATION.md).
 
 ## What works right now
 
