@@ -10,9 +10,15 @@ analogue is a backend-agnostic **slot runtime** with three tiers:
 
 | Backend | Purpose | Runs on |
 |---|---|---|
-| **Reference — PyTorch** | quickest path to working models; enrollment | Mac (MPS), Orin (CUDA), CPU |
-| **Portable — ONNX Runtime** *(next)* | one model file, int8, hardware EPs | Mac (CoreML/ANE), Orin (TensorRT), any CPU |
+| **Reference — PyTorch** | quickest path to working models; enrollment | Mac (MPS), Orin (CUDA), Thor (CUDA 13), CPU |
+| **Portable — ONNX Runtime** *(next)* | one model file, int8, hardware EPs | Mac (CoreML/ANE), Orin (TensorRT), Thor (TensorRT 10.13), any CPU |
 | **Fallback — pure stdlib** | heuristic slots; proves the architecture | literally anywhere |
+
+**Thor compute budget:** On Jetson Thor (128GB LPDDR5X, 2070 TFLOPS Blackwell),
+all 4 slots run reference backends simultaneously alongside a 70B LLM, Whisper
+large-v3, and Kokoro TTS. This enables daredevil to run **in-process** as a
+library import rather than a separate HTTP service — eliminating the 1s polling
+delay and enabling real-time awareness (~100ms cycle) at 500-person scale.
 
 **Why ONNX Runtime is the long-term target:** the *same* model artifact runs with
 the CoreML execution provider on a MacBook (Apple Neural Engine) and the

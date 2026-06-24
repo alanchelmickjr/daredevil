@@ -62,9 +62,15 @@ including those the law won't let anyone else identify in the cloud.
       every device an agent runs on (the open source *is* the brand). Strategy:
       [`PORTABILITY.md`](PORTABILITY.md); first target (iPhone 13+):
       [`IOS_PORT.md`](IOS_PORT.md)
+- [ ] **Library import mode** — expose `Pipeline` as an embeddable component
+      (not just HTTP server) so Chloe can run daredevil in-process on Thor
+      without HTTP polling overhead. Same awareness map, direct function call.
 - [ ] Live Gun P2P voiceprint sync across two devices (encrypted, SEA)
 - [ ] Record the demo video (deterministic `--file` scene)
 - [ ] Validate on Jetson / Orin
+- [ ] Validate on **Jetson Thor** (TensorRT 10.13, CUDA 13, JetPack 7) —
+      in-process mode alongside concurrent LLM/STT/TTS. Target: 500-person
+      crowd with tiered attention gating.
 - [ ] Publish `pip install daredevil` to PyPI
 
 ## Original 10-day plan (from the build spec)

@@ -74,6 +74,7 @@ accelerates on device" engine. The portable core makes it real:
 | Server / cloud | CUDA, TensorRT | the big iron; also where Python-direct is fine |
 | Workstation / laptop | CoreML (ANE) · DirectML · CPU | Mac Neural Engine; Windows/Linux x86 |
 | Jetson / Orin | TensorRT | int8, the edge-GPU story |
+| **Jetson / Thor** | **TensorRT 10.13 (Blackwell, CUDA 13)** | **in-process alongside LLM/STT/TTS; 500-person scale** |
 | **Mobile NPU** | **CoreML (iOS/ANE) · NNAPI / QNN-Hexagon (Android)** | target #1 = iPhone |
 | Browser / agent | WASM · WebGPU | the in-page / in-agent path |
 | **On-module DSP** | int8 kernels | the patent hardware; the reason all of this exists |

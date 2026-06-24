@@ -353,14 +353,91 @@ Both Claude agents should:
 4. The Chloe agent does NOT modify the daredevil repo
 5. Integration testing: run both processes, verify the polling loop works
 
+## Thor in-process mode (500-person scale)
+
+On AGX Orin, daredevil runs as a **separate process** polled over HTTP at 1s
+intervals. This was a GPU budget compromise — Orin couldn't spare compute for
+daredevil alongside Hume + vision.
+
+On **Jetson Thor** (128GB LPDDR5X, 2070 TFLOPS Blackwell), daredevil runs
+**in-process on the same GPU** as the LLM, STT, and TTS. No HTTP polling.
+Direct Python library import. Real-time awareness at the pipeline's native
+rate (~100ms per cycle vs 1s stale on Orin).
+
+### Library import mode
+
+```python
+# In chloe/perception/daredevil_awareness.py (Thor path)
+from daredevil.pipeline import Pipeline
+from daredevil.config import Config
+
+cfg = Config()
+cfg.backends_prefer_onnx = True  # TensorRT EP on Thor
+pipeline = Pipeline(cfg)
+pipeline.warmup()
+
+# Direct call — no HTTP, no polling delay
+awareness_map = pipeline.run(audio_chunk, sample_rate=16000)
+
+# Publish to IPC bus directly
+for source in awareness_map["sources"]:
+    if source["type"] == "enrolled" and source["attention"] == "surface":
+        bus.emit(Topic.VISION_FACE_RECOGNIZED, name=source["id"], ...)
+```
+
+The HTTP poller (`daredevil_poller.py`) remains as the fallback for Orin and
+mixed-process deployments. The orchestrator picks the mode based on
+`CHLOE_COMPUTE`:
+
+```python
+if config.compute_platform == "thor":
+    from chloe.perception.daredevil_awareness import DaredevilInProcess
+    self._ears = DaredevilInProcess(bus)
+else:
+    from chloe.perception.daredevil_poller import DaredevilPoller
+    self._ears = DaredevilPoller(bus)
+```
+
+### Attention gating at 500 people
+
+The 4-slot parallel architecture (WHO + WHERE + WHAT + HOW) fits easily in
+Thor's compute budget alongside concurrent LLM + STT + TTS + vision. At
+500-person scale:
+
+| Tier | Count | Compute per source | GPU cost |
+|------|-------|--------------------|----------|
+| **Surface** | 3-5 | All 4 slots (ECAPA + PANNs + prosody + DOA) | Full |
+| **Monitor** | 10-15 | WHO only (ECAPA embedding + cosine match) | Light |
+| **Ambient** | 30+ | VAD + DOA bearing only | Minimal |
+| **Ignore** | rest | Below noise floor, filtered | Zero |
+
+Proven: Alan ran face recognition at 200 people on AGX Orin (face-only).
+Thor adds voice ID + DOA + events + prosody at the same scale.
+
+### Multi-modal identity fusion (eyes + ears)
+
+When both OAK-D face detection and daredevil voice ID are running:
+
+| Eyes see face? | Ears hear voice? | At same angle? | Result |
+|:-:|:-:|:-:|---|
+| Yes | Yes | Yes | **Locked.** High confidence. Name them. |
+| Yes | Yes | No | Two people. Track both. |
+| Yes | No | — | Visual-only. "Alan is here but not talking." |
+| No | Yes | — | Audio-only. "Alan's voice from 30°, face not visible." |
+
+This fusion closes the gaps in both modalities — face fails on turned heads,
+darkness, distance; voice fails on silence, short utterances, unenrolled speakers.
+Together they cover what neither can alone.
+
 ## Hardware notes
 
 | Part | Detail | Risk |
 |------|--------|------|
-| Jetson | CLAUDE.md says AGX Orin 64GB (JP6). Sprint says Nano 8GB. **Confirm which.** | Orin handles everything; Nano needs ONNX. |
+| Jetson (current) | AGX Orin 64GB (JP6) or Orin Nano Super | Orin handles HTTP mode; Nano needs ONNX |
+| Jetson (upgrade) | **Thor T5000** (JP7, CUDA 13, TensorRT 10.13, 128GB LPDDR5X) | In-process mode. unitree_sdk2 needs Ubuntu 24.04 compat test |
 | Mic | ReSpeaker v2.0 USB (XMOS XVF-3000 AEC, 4-mic circular array) | Daredevil needs ReSpeaker array geometry |
-| Camera | Intel RealSense (head) | Face detection is Chloe's job, not daredevil's |
-| Arms | Dual SO-101, 6-DOF, Feetech STS3215, 3 serial buses | Gesture keyframes are Chloe's job |
+| Camera | OAK-D Pro (head) | Face detection is Chloe's job, not daredevil's |
+| Arms | Dual SO-101 6-DOF (current) or Unitree G1 29-DOF (Thor path) | Gesture keyframes are Chloe's job |
 | Display | 7" touchscreen via HDMI, GTK WebKit kiosk | Daredevil HUD must render at 1024x600 |
-| Base | iMRP omni-wheel (backwards mount, inverted controls) | |
-| Gantry | XLE pan/tilt (pan ±180°, tilt ±45°) | Daredevil azimuth → gantry pan for head tracking |
+| Base | iMRP-500 hospital-grade (current) or G1 bipedal (Thor path) | |
+| Gantry | XLE pan/tilt (pan ±180°, tilt ±45°) or G1 neck joints | Daredevil azimuth → gantry/neck pan for head tracking |
