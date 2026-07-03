@@ -11,6 +11,7 @@ from __future__ import annotations
 import abc
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -52,7 +53,10 @@ class LocalStore(IdentityStore):
 
     def put(self, name: str, record: dict) -> None:
         blob = crypto.encrypt(record, self.key)
-        self._path(name).write_text(json.dumps(blob))
+        p = self._path(name)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(blob))
+        os.replace(tmp, p)
 
     def get(self, name: str) -> Optional[dict]:
         p = self._path(name)

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -56,6 +57,8 @@ class EnrollmentManager:
         self.store = store
         self.tau = config.thresholds.enroll_tau
         self.idm = config.identity
+        # Serialize all read-modify-write of shared identity state (_llr, store).
+        self._lock = threading.Lock()
         # Wald decision bounds derived from the configured error rates.
         self._A = math.log((1.0 - self.idm.beta) / self.idm.alpha)   # accept identity
         self._B = math.log(self.idm.beta / (1.0 - self.idm.alpha))   # reject identity
@@ -82,35 +85,38 @@ class EnrollmentManager:
     def enroll(self, audio: List[float], sr: int, name: str, seconds: float,
                provisional: bool = False) -> dict:
         self.slot.warmup()
+        # Slow embedding computation stays OUTSIDE the lock.
         vec = self._mean_embedding(audio, sr)
         conf = enrollment_confidence(seconds, self.tau)
-        # Load existing record to support multi-sample enrollment (Welford update)
-        existing = self.store.get(name)
-        n_samples = 1
-        if existing and existing.get("n_samples"):
-            old_vec = existing["vector"]
-            n_old = existing["n_samples"]
-            n_samples = n_old + 1
-            # Welford online mean update
-            vec = [(old_vec[i] * n_old + vec[i]) / n_samples for i in range(len(vec))]
-            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-            vec = [x / norm for x in vec]
-        record = {
-            "name": name,
-            "vector": vec,
-            "dim": len(vec),
-            "n_samples": n_samples,
-            "enrollment_confidence": round(conf, 4),
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "backend": self.slot.backend,
-            "provisional": provisional or bool(existing and existing.get("provisional")),
-        }
-        self.store.put(name, record)
-        log.info("enrolled '%s': dim=%d, conf=%.3f, n_samples=%d, backend=%s",
-                 name, len(vec), conf, n_samples, self.slot.backend)
-        return {"name": name, "enrollment_confidence": round(conf, 4),
-                "seconds": seconds, "backend": self.slot.backend, "dim": len(vec),
-                "n_samples": n_samples}
+        # Serialized get -> Welford -> put critical section.
+        with self._lock:
+            # Load existing record to support multi-sample enrollment (Welford update)
+            existing = self.store.get(name)
+            n_samples = 1
+            if existing and existing.get("n_samples"):
+                old_vec = existing["vector"]
+                n_old = existing["n_samples"]
+                n_samples = n_old + 1
+                # Welford online mean update
+                vec = [(old_vec[i] * n_old + vec[i]) / n_samples for i in range(len(vec))]
+                norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+                vec = [x / norm for x in vec]
+            record = {
+                "name": name,
+                "vector": vec,
+                "dim": len(vec),
+                "n_samples": n_samples,
+                "enrollment_confidence": round(conf, 4),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "backend": self.slot.backend,
+                "provisional": provisional or bool(existing and existing.get("provisional")),
+            }
+            self.store.put(name, record)
+            log.info("enrolled '%s': dim=%d, conf=%.3f, n_samples=%d, backend=%s",
+                     name, len(vec), conf, n_samples, self.slot.backend)
+            return {"name": name, "enrollment_confidence": round(conf, 4),
+                    "seconds": seconds, "backend": self.slot.backend, "dim": len(vec),
+                    "n_samples": n_samples}
 
     # --- matching (Wald SPRT, accumulated per track) ----------------------
     def _background_stats(self, vector: Sequence[float],
@@ -202,16 +208,18 @@ class EnrollmentManager:
                          - _log_gaussian(s, mu0, sd0))
 
             kk = (key, name)
-            prev = self._llr.get(kk, 0.0)
-            was_decided = prev >= self._A
-            acc = (1.0 - idm.leak) * prev + quality * frame_llr
-            if was_decided:
-                # Hysteresis: once identified, hold. LLR never drops below the
-                # acquire threshold. Only explicit track deletion revokes identity.
-                acc = max(acc, self._A)
-            elif acc <= self._B:
-                acc = 0.0
-            self._llr[kk] = acc
+            # Only the _llr read-modify-write is guarded; SPRT compute stays outside.
+            with self._lock:
+                prev = self._llr.get(kk, 0.0)
+                was_decided = prev >= self._A
+                acc = (1.0 - idm.leak) * prev + quality * frame_llr
+                if was_decided:
+                    # Hysteresis: once identified, hold. LLR never drops below the
+                    # acquire threshold. Only explicit track deletion revokes identity.
+                    acc = max(acc, self._A)
+                elif acc <= self._B:
+                    acc = 0.0
+                self._llr[kk] = acc
 
             posterior = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, acc))))
             immediate = s >= idm.immediate_cosine
@@ -261,38 +269,41 @@ class EnrollmentManager:
         return [r["name"] for r in self.store.all()]
 
     def delete(self, name: str) -> None:
-        self.store.delete(name)
-        for kk in [kk for kk in self._llr if kk[1] == name]:
-            self._llr.pop(kk, None)
+        with self._lock:
+            self.store.delete(name)
+            for kk in [kk for kk in self._llr if kk[1] == name]:
+                self._llr.pop(kk, None)
 
     def rename(self, old: str, new: str):
         """Rename a (usually provisional) voiceprint in place. On collision with an
         existing print, MERGE the old evidence into it (Welford, sample-weighted)."""
-        rec = self.store.get(old)
-        if rec is None:
-            return None
-        target = self.store.get(new)
-        if target is not None and target.get("n_samples"):
-            n_old, n_add = target.get("n_samples", 1), rec.get("n_samples", 1)
-            n = n_old + n_add
-            m = min(len(target["vector"]), len(rec["vector"]))
-            merged = [(target["vector"][i] * n_old + rec["vector"][i] * n_add) / n
-                      for i in range(m)]
-            nrm = math.sqrt(sum(x * x for x in merged)) or 1.0
-            target["vector"] = [x / nrm for x in merged]
-            target["n_samples"] = n
-            self.store.put(new, target)
-        else:
-            rec["name"] = new
-            rec.pop("provisional", None)
-            rec.pop("name_declined", None)
-            self.store.put(new, rec)
-        self.store.delete(old)
-        for kk in [k for k in self._llr if k[1] == old]:
-            self._llr[(kk[0], new)] = self._llr.pop(kk)
-        log.info("renamed voiceprint '%s' -> '%s'", old, new)
-        return self.store.get(new)
+        with self._lock:
+            rec = self.store.get(old)
+            if rec is None:
+                return None
+            target = self.store.get(new)
+            if target is not None and target.get("n_samples"):
+                n_old, n_add = target.get("n_samples", 1), rec.get("n_samples", 1)
+                n = n_old + n_add
+                m = min(len(target["vector"]), len(rec["vector"]))
+                merged = [(target["vector"][i] * n_old + rec["vector"][i] * n_add) / n
+                          for i in range(m)]
+                nrm = math.sqrt(sum(x * x for x in merged)) or 1.0
+                target["vector"] = [x / nrm for x in merged]
+                target["n_samples"] = n
+                self.store.put(new, target)
+            else:
+                rec["name"] = new
+                rec.pop("provisional", None)
+                rec.pop("name_declined", None)
+                self.store.put(new, rec)
+            self.store.delete(old)
+            for kk in [k for k in self._llr if k[1] == old]:
+                self._llr[(kk[0], new)] = self._llr.pop(kk)
+            log.info("renamed voiceprint '%s' -> '%s'", old, new)
+            return self.store.get(new)
 
     def reset_accumulators(self) -> None:
         """Reset all SPRT accumulators (e.g. on scene change)."""
-        self._llr.clear()
+        with self._lock:
+            self._llr.clear()
