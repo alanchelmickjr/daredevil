@@ -79,7 +79,7 @@ def _manager(tmp, **idm):
     store = LocalStore(data_dir=str(tmp))
     mgr = EnrollmentManager(cfg, slot, store)
     slot.q = [list(_seed_base())]
-    mgr.enroll(audio=[0.0] * 16000, sr=16000, name="alan", seconds=10)
+    mgr.enroll(audio=[0.1] * 16000, sr=16000, name="alan", seconds=10)
     return mgr, store
 
 

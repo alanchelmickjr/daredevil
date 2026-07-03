@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source /opt/homebrew/Caskroom/miniforge/base/etc/profile.d/conda.sh && conda activate daredevil && python *)",
+      "Bash(source /opt/homebrew/Caskroom/miniforge/base/etc/profile.d/conda.sh && conda activate daredevil && pip *)",
+      "Bash(source /opt/homebrew/Caskroom/miniforge/base/etc/profile.d/conda.sh && conda activate daredevil && daredevil *)",
+      "Bash(conda run -n daredevil *)",
+      "Bash(lsof -ti:8770 *)",
+      "Bash(lsof -ti:8770)",
+      "Bash(pkill -f *)",
+      "Bash(curl -s http://127.0.0.1:8770/*)",
+      "Bash(pip install *)",
+      "Bash(pip show *)"
+    ]
+  }
+}

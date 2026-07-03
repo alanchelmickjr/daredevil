@@ -48,7 +48,11 @@ class LocalStore(IdentityStore):
         self.key = key
 
     def _path(self, name: str) -> Path:
-        return self.dir / f"{_SAFE.sub('_', name)}.json"
+        # Casefold the FILENAME key (gap M11): "Alan" and "alan" are one speaker.
+        # APFS is case-insensitive anyway — unfolded names silently overwrote each
+        # other on macOS while remaining distinct speakers in matching elsewhere.
+        # Display capitalization lives in the record's "name" field, not the path.
+        return self.dir / f"{_SAFE.sub('_', name.casefold())}.json"
 
     def put(self, name: str, record: dict) -> None:
         blob = crypto.encrypt(record, self.key)

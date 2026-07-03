@@ -57,7 +57,20 @@ class _CalibrationSession:
 
     def start(self, name: str = "you", seconds: float = 20.0, others: bool = True):
         with self._lock:
-            self._name = name or "you"
+            # Gap M11: the "you" default created a second, near-identical print of
+            # the owner that flapped the tie-break. If no real name is given, reuse
+            # the sole enrolled identity when unambiguous; otherwise refuse.
+            if not name or name.strip().casefold() == "you":
+                enrolled = self.pipe.enrollment.names()
+                if len(enrolled) == 1:
+                    name = enrolled[0]
+                    log.info("calibration: no name given — reusing sole enrolled '%s'", name)
+                else:
+                    self.status = dict(self._idle_status(),
+                                       phase="error", prompt="Give me a name first — "
+                                       "calibrating as 'you' would create a duplicate speaker.")
+                    return
+            self._name = name
             self._seconds = seconds
             self._include_others = others
             self._voiceprint = None
@@ -225,11 +238,12 @@ class _CalibrationSession:
         h0 = "room+world" if (self._world_ran and self._bg_cos) else "room-tone"
         model, dprime = cal.fit(self._target_cos, self._bg_cos, h0_source=h0)
         cal.save(model)
-        # A new fit invalidates every accumulated identity decision: without this,
-        # tracks latched (hysteresis) under the OLD model keep their old names
-        # forever and the newly calibrated person can never win those tracks.
-        # (First slice of gap M1 hot-apply; full apply_model() lands with step 3.)
-        self.pipe.enrollment.reset_accumulators()
+        # Hot-apply (gap M1): the fitted model must govern the RUNNING matcher —
+        # saved-to-disk-only meant the old Gaussians kept deciding until restart
+        # (observed live: llr=4456 runaway 8s after "calibration saved").
+        # apply_model swaps Gaussians, recomputes Wald bounds, reseeds CFAR, and
+        # invalidates decisions accumulated under the old model.
+        self.pipe.enrollment.apply_model(model)
         err = _dprime_error_pct(dprime)
         quality = "good" if dprime >= 2.5 else ("fair" if dprime >= 1.5 else "poor")
 
@@ -259,7 +273,16 @@ class _State:
     def __init__(self, live: bool = False):
         self.live = live
         self.source = "live" if live else "synthetic"
-        self.pipe = Pipeline(config=Config(), array=(None if live else MACBOOK_3))
+        # Synthetic demo gets an ISOLATED store (gap M4): a bare `daredevil serve`
+        # once wrote a synthetic "alan" into the REAL voiceprint store, where it
+        # matched as candidate and cohort member and could Welford-merge into the
+        # genuine owner print. Demo state lives under <data_dir>/demo/ instead.
+        if live:
+            cfg = Config()
+        else:
+            from ..config import default_data_dir
+            cfg = Config(data_dir=str(default_data_dir() / "demo"))
+        self.pipe = Pipeline(config=cfg, array=(None if live else MACBOOK_3))
         if not live:
             self.pipe.enroll("alan", 3, source="synthetic")
         self.pipe.warmup()
@@ -269,6 +292,7 @@ class _State:
         self._transcript = None
         self._llm_response = None
         self._stt_thread = None
+        self._track_audio: dict = {}   # source id -> recent mono audio (train-by-marking)
         self._scene = None  # custom synthetic scene; None = DEFAULT_SCENE
         from .transcriber import Transcriber
         self.transcriber = Transcriber()
@@ -390,11 +414,12 @@ class _State:
         # active_speaker: the highest-priority enrolled source currently
         # speaking. Dexter uses this to know WHO is talking right now
         # without parsing the full sources array.
+        from ..config import is_speech_class
         active = None
         for s in amap.get("sources", []):
             if (s.get("type") == "enrolled"
                     and s.get("attention") == "surface"
-                    and s.get("event", {}).get("class") == "speech"):
+                    and is_speech_class(s.get("event", {}).get("class"))):
                 if active is None or s["priority"] > active["priority"]:
                     active = s
         amap["active_speaker"] = {
@@ -414,13 +439,48 @@ class _State:
 
         self._last = amap
 
-        # TRANSCRIPTION — feed audio, flush in background thread.
+        # Train-by-marking buffers: keep the last ~15s of window audio per speechy
+        # source so an UNKNOWN can be named from what it just said (/enroll_track).
+        # Mono caveat: the buffer holds the room mix during that source's windows.
+        try:
+            if audio:
+                from ..config import is_speech_class
+                for s in amap.get("sources", []):
+                    if is_speech_class(s.get("event", {}).get("class")):
+                        # Keyed on the stable track — survives UNKNOWN -> name renames.
+                        # Append only the hop-length TAIL: windows overlap (1.0s window,
+                        # 0.5s hop), so appending whole windows doubled every sample —
+                        # observed: "90.0s buffered" from ~45s of wall clock.
+                        buf = self._track_audio.setdefault(s.get("track") or s["id"], [])
+                        hop_n = int(self.pipe.config.hop_seconds * sr)
+                        buf.extend(audio[-hop_n:])
+                        cap_n = int(15 * sr)
+                        if len(buf) > cap_n:
+                            del buf[:len(buf) - cap_n]
+                live_ids = {s.get("track") or s["id"] for s in amap.get("sources", [])}
+                for dead in [k for k in self._track_audio if k not in live_ids]:
+                    self._track_audio.pop(dead, None)
+        except Exception as e:
+            log.warning(f"track-audio buffer error: {e}")
+
+        # TRANSCRIPTION — focus-gated (gap M9): feed STT only while the FOCUSED
+        # source is the one actually speaking. Mono can't isolate audio, so the
+        # gate is temporal: other sources stay tracked, but their windows are not
+        # transcribed under the focused person's name.
         try:
             if self._focus_id and audio:
                 from ..audio.utils import rms as _rms_check
+                focused_speaking = False
+                for s in amap.get("sources", []):
+                    if s.get("id") == self._focus_id:
+                        act = amap.get("active_speaker")
+                        focused_speaking = (act and act.get("id") == self._focus_id) or (
+                            s.get("attention") == "surface")
+                        break
                 energy = _rms_check(audio)
-                is_speaking = energy > self.pipe.config.thresholds.vad * 3
-                self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
+                is_speaking = focused_speaking and energy > self.pipe.config.thresholds.vad * 3
+                self.transcriber.feed(self._focus_id, audio if focused_speaking else [],
+                                      sr, is_speaking)
                 if self._stt_thread is None or not self._stt_thread.is_alive():
                     self._stt_thread = threading.Thread(
                         target=self._bg_transcribe, args=(audio, sr, amap),
@@ -430,6 +490,33 @@ class _State:
             log.warning(f"transcription error: {e}")
 
         return amap
+
+    def enroll_track(self, source_id: str, name: str) -> dict:
+        """Name a (typically UNKNOWN) source from its buffered recent audio."""
+        if not source_id or not name or name.strip().casefold() == "you":
+            raise ValueError("both a source id and a real name are required")
+        # Accept a display id OR a track key; resolve to the stable track key.
+        track = source_id
+        last = self._last or {}
+        for s in last.get("sources", []):
+            if s.get("id") == source_id:
+                track = s.get("track") or source_id
+                break
+        buf = self._track_audio.get(track) or self._track_audio.get(source_id)
+        sr = self.pipe.config.inference_sr
+        min_s = 3.0
+        if not buf or len(buf) < int(min_s * sr):
+            raise ValueError(f"not enough buffered speech for {source_id} — "
+                             f"need >= {min_s:.0f}s, have "
+                             f"{(len(buf) / sr if buf else 0):.1f}s. Let them talk, then mark.")
+        res = self.pipe.enrollment.enroll(list(buf), sr, name.strip(),
+                                          len(buf) / sr)
+        # The track re-decides under the new print instead of keeping stale state.
+        self.pipe.enrollment.forget_track(track)
+        log.info("enroll_track: %s named '%s' from %.1fs buffered audio",
+                 source_id, name.strip(), len(buf) / sr)
+        return {"name": res["name"], "n_samples": res["n_samples"],
+                "seconds": round(len(buf) / sr, 1)}
 
 
 def _make_handler(state: _State):
@@ -497,6 +584,15 @@ def _make_handler(state: _State):
                     state.clear_focus()
                     log.info("FOCUS CLEARED")
                 return self._send(200, json.dumps({"ok": True, "focus": state._focus_id}))
+            if u.path == "/enroll_track":
+                # Train-by-marking: name an UNKNOWN source from its buffered audio.
+                params = json.loads(body) if body else {}
+                try:
+                    res = state.enroll_track(params.get("id", ""),
+                                             params.get("name", ""))
+                    return self._send(200, json.dumps({"ok": True, **res}))
+                except ValueError as e:
+                    return self._send(400, json.dumps({"ok": False, "error": str(e)}))
             return self._send(404, json.dumps({"error": "not found"}))
 
     return Handler

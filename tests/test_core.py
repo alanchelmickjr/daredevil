@@ -98,6 +98,9 @@ def test_end_to_end_synthetic(tmp_path):
     enr = pipe.enroll("alan", mic_seconds=3, source="synthetic")
     assert enr["enrollment_confidence"] == pytest.approx(0.632, abs=0.01)
 
+    # Two windows: since the anti-blip frame-LLR clip, no single frame can decide
+    # an identity alone — acquisition takes two agreeing frames (track persists).
+    pipe.listen(duration=1.0, source="synthetic")
     amap = pipe.listen(duration=1.0, source="synthetic")
     assert amap["privacy"]["cloud_used"] is False
     assert amap["array"]["spatial"] is True
@@ -119,6 +122,7 @@ def test_attention_gate_routes_subset(tmp_path):
     from daredevil.stage3.router import llm_payload
     pipe = Pipeline(config=Config(data_dir=str(tmp_path)), array=MACBOOK_3)
     pipe.enroll("alan", mic_seconds=3, source="synthetic")
+    pipe.listen(duration=1.0, source="synthetic")   # frame 1 arms (2-frame acquisition)
     amap = pipe.listen(duration=1.0, source="synthetic")
 
     classes = {s["event"]["class"] for s in amap["sources"]}
@@ -176,3 +180,36 @@ def test_speech_gate_passes_quiet_speech():
                                  zcr_gate=th.speech_gate_zcr)
     # The tunables exist and keep the documented relationship to the VAD floor.
     assert th.speech_gate_energy > th.vad
+
+
+def test_is_speech_class_across_backends():
+    """Gap M3: PANNs emits AudioSet labels verbatim; fallback emits lowercase.
+    Exact lowercase comparison made active_speaker permanently None live."""
+    from daredevil.config import is_speech_class
+    assert is_speech_class("speech")
+    assert is_speech_class("Speech")
+    assert is_speech_class("Male speech, man speaking")
+    assert not is_speech_class("Music")
+    assert not is_speech_class("baby_cry")
+    assert not is_speech_class(None)
+    assert not is_speech_class("")
+
+
+def test_dedupe_identity_claims_one_track_per_person():
+    """Gap M15 slice: two tracks claiming the same name — live speech wins, the
+    stale/held claimant is forgotten (observed live: Speech-Alan + noise-Alan)."""
+    from daredevil.pipeline import _dedupe_identity_claims
+
+    forgotten = []
+    class _Enr:
+        def forget_track(self, key): forgotten.append(key)
+
+    speech = {"identity": {"name": "Alan", "score": 0.99}, "unknown_id": "UNKNOWN-001",
+              "event": {"class": "Speech"}}
+    stale = {"identity": {"name": "Alan", "score": 0.99, "held": True},
+             "unknown_id": "UNKNOWN-007", "event": {"class": "White noise"}}
+    records = [stale, speech]
+    _dedupe_identity_claims(records, _Enr())
+    assert speech["identity"] is not None, "the speaking track lost its name"
+    assert stale["identity"] is None, "the stale claimant kept the name"
+    assert forgotten == ["UNKNOWN-007"]

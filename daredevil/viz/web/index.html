@@ -253,9 +253,24 @@ function waveDraw(cv,freq,col){const ctx=cv.getContext('2d');let t=0;
 function makeCard(s){
   const c=document.createElement('div');c.className='card';
   c.innerHTML='<div class="hd"><span class="who"></span><span class="pr"></span></div>'
-    +'<canvas></canvas><div class="ft"></div><div class="bar"><i></i></div><div class="gate"></div>';
-  c.onclick=()=>setFocus(s.id,s.identity&&s.identity.name);
+    +'<canvas></canvas><div class="ft"></div><div class="bar"><i></i></div><div class="gate"></div>'
+    +'<button class="train" style="display:none;margin-top:4px;font-size:10px;'
+    +'background:#2b2620;color:#e8ddc8;border:1px solid #6b5d47;border-radius:4px;'
+    +'padding:2px 8px;cursor:pointer">✎ name this voice</button>';
+  c.onclick=()=>setFocus(c._sid||s.id,c._iname);   // live ids, not creation-time ones
+  const tb=c.querySelector('.train');
+  tb.onclick=(ev)=>{ev.stopPropagation();trainTrack(c._track||s.id);};
   return c;}
+function trainTrack(id){
+  const n=prompt('Who is this? (name to enroll from their recent speech)');
+  if(!n)return;
+  fetch('/enroll_track',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id,name:n})})
+    .then(r=>r.json())
+    .then(d=>say(d.ok?('<b>learned '+d.name+'</b><br>'+d.seconds+'s of speech, sample #'+d.n_samples)
+                     :('<b>not yet:</b> '+d.error)))
+    .catch(e=>say('enroll failed: '+e));}
+function isSpeechClass(cls){return !!cls && /speech/i.test(cls);}
 function render(map){
   const now=Date.now(),cx=innerWidth/2,cy=innerHeight/2;links.innerHTML='';
   const currentIds=new Set();
@@ -267,22 +282,30 @@ function render(map){
     if(!azBuckets[az])azBuckets[az]=[];
     azBuckets[az].push(s);});
   sources.forEach(s=>{
-    currentIds.add(s.id);
-    seen[s.id]=now;
+    // Cards key on the stable TRACK: when an unknown gets identified its display
+    // id renames, and the same card must carry forward (waveform, focus, button)
+    // instead of dying and respawning.
+    const key=s.track||s.id;
+    currentIds.add(key);
+    seen[key]=now;
     const surfaced=s.attention==='surface',safety=s.event&&s.event.safety_critical;
     const enrolled=s.type==='enrolled';
     const coasting=s.track_status==='coasting';
     const col=safety?'#ff5a6e':(surfaced?'#5ef0a0':'#6b5d47');
-    let c=cards[s.id];
-    if(!c){c=makeCard(s);cards[s.id]=c;}
-    // enrolled/known speakers go to the left column
-    if(enrolled){
+    let c=cards[key];
+    if(!c){c=makeCard(s);cards[key]=c;}
+    c._sid=s.id; c._iname=s.identity&&s.identity.name; c._track=key;
+    // Speakers go to the left column: enrolled AND unknown-but-speech (so a new
+    // voice can be marked + named from its card while it's still unknown).
+    const speechy=isSpeechClass(s.event&&s.event.class);
+    if(enrolled||speechy){
       if(c.parentNode!==known){c.remove();
         c.style.left='';c.style.top='';c.style.position='relative';
         c.style.transform='none';c.style.width='100%';
         known.appendChild(c);}
-      c.className='card surface';
-      c.style.opacity='';
+      c.className='card '+(enrolled?'surface':'ambient');
+      c.style.opacity=(s.identity&&s.identity.held)?'0.55':'';   // dimmed = held, between utterances
+      c.querySelector('.train').style.display=enrolled?'none':'block';
     } else if(coasting && s.id!==focusId && s.id!==map.focus
               && !(s.identity && s.identity.name===focusId)){
       // coasting = lost contact, fade to sidebar — but never fade the focused source

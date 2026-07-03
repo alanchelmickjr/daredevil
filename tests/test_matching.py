@@ -62,19 +62,24 @@ def _manager(tmp):
 
 def _enroll(mgr, slot, vec, name="alan"):
     slot.q = [list(vec)]
-    return mgr.enroll(audio=[0.0] * 16000, sr=16000, name=name, seconds=10)
+    return mgr.enroll(audio=[0.1] * 16000, sr=16000, name=name, seconds=10)
 
 
 # --- SPRT identity decisions ------------------------------------------------
 
-def test_single_realistic_frame_matches_one_shot(tmp_path):
+def test_realistic_frames_match_in_two(tmp_path):
+    """Contract since the frame-LLR clip: NO single frame can decide alone (blip/
+    replay robustness) — two squarely-same-speaker frames decide. At the live
+    0.5s hop that is ~1s to acquisition."""
     rng = random.Random(1)
     base = _rand_unit(rng)
     mgr, slot, store = _manager(tmp_path)
     _enroll(mgr, slot, base)
     enrolled = store.get("alan")["vector"]
     m = mgr.match(_at_cosine(0.55, enrolled, rng), energy=0.05)
-    assert mgr.is_match(m) and m["name"] == "alan"   # 0.55 is squarely same-speaker
+    assert not mgr.is_match(m), "a single frame decided alone (clip broken)"
+    m = mgr.match(_at_cosine(0.55, enrolled, rng), energy=0.05)
+    assert mgr.is_match(m) and m["name"] == "alan"
 
 
 def test_impostor_never_matches(tmp_path):
@@ -89,7 +94,9 @@ def test_impostor_never_matches(tmp_path):
     assert false == 0
 
 
-def test_one_shot_match_rate_is_high(tmp_path):
+def test_two_frame_match_rate_is_high(tmp_path):
+    """Fresh manager per trial; two same-speaker frames must acquire ≥90% of the
+    time (was one-shot before the anti-blip frame-LLR clip)."""
     rng = random.Random(4)
     base = _rand_unit(rng)
     mgr, slot, store = _manager(tmp_path)
@@ -97,9 +104,10 @@ def test_one_shot_match_rate_is_high(tmp_path):
     enrolled = store.get("alan")["vector"]
     hits, N = 0, 30
     for _ in range(N):
-        om = EnrollmentManager(mgr.config, slot, store)   # fresh = stateless one-shot
+        om = EnrollmentManager(mgr.config, slot, store)   # fresh accumulators
+        om.match(_at_cosine(0.55, enrolled, rng), energy=0.05)
         hits += om.is_match(om.match(_at_cosine(0.55, enrolled, rng), energy=0.05))
-    assert hits >= 0.9 * N   # the old matcher scored 0/30 here
+    assert hits >= 0.9 * N
 
 
 def test_weak_frames_accumulate_then_lock(tmp_path):
@@ -172,20 +180,70 @@ def test_immediate_accept_beats_earlier_nonmatch_in_cohort(tmp_path):
     _enroll(mgr, slot, a, name="Emerson")
     _enroll(mgr, slot, b, name="alan")
     enrolled = store.get("alan")["vector"]
-    m = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")      # arms
+    m = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")  # engages
     assert mgr.is_match(m), "decided candidate was dropped from best-selection"
     assert m["name"] == "alan"
 
 
-def test_immediate_accept_engages_hysteresis_hold(tmp_path):
-    """An immediate accept must persist at the acquire bound: identity holds on
-    the NEXT frame even if that frame's cosine dips to borderline."""
+def test_immediate_accept_needs_two_consecutive_strong_frames(tmp_path):
+    """One loud blip (or one frame of a replayed recording) must NOT latch an
+    identity: the first strong frame arms; only a consecutive strong frame
+    engages the hold (gaps B2/M16). A weak frame in between disarms."""
     rng = random.Random(8)
     base = _rand_unit(rng)
     mgr, slot, store = _manager(tmp_path)
     _enroll(mgr, slot, base)
     enrolled = store.get("alan")["vector"]
     m1 = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
-    assert mgr.is_match(m1)
-    m2 = mgr.match(_at_cosine(0.30, enrolled, rng), energy=0.05, key="t1")
-    assert mgr.is_match(m2) and m2["name"] == "alan", "identity flickered off after immediate accept"
+    assert not mgr.is_match(m1), "single strong frame latched an identity"
+    mgr.match(_at_cosine(0.20, enrolled, rng), energy=0.05, key="t1")      # disarms
+    m2 = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    assert not mgr.is_match(m2), "non-consecutive strong frames latched"
+    m3 = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    assert mgr.is_match(m3), "two consecutive strong frames failed to latch"
+    m4 = mgr.match(_at_cosine(0.30, enrolled, rng), energy=0.05, key="t1")
+    assert mgr.is_match(m4) and m4["name"] == "alan", "held identity flickered off"
+
+
+def test_held_identity_demotes_on_sustained_contrary_evidence(tmp_path):
+    """Revocable hold (gap B2): a decided track taken over by a DIFFERENT voice
+    must demote within a bounded number of contrary frames — never held forever.
+    Live incident: raw=-0.150 frames held as 'Alan' for ~8 minutes."""
+    rng = random.Random(9)
+    base = _rand_unit(rng)
+    mgr, slot, store = _manager(tmp_path)
+    _enroll(mgr, slot, base)
+    enrolled = store.get("alan")["vector"]
+    for _ in range(2):
+        mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    assert mgr.is_match(mgr.match(_at_cosine(0.60, enrolled, rng), energy=0.05, key="t1"))
+    demoted_at = None
+    for f in range(1, 11):
+        m = mgr.match(_at_cosine(0.05, enrolled, rng), energy=0.05, key="t1")
+        if not mgr.is_match(m):
+            demoted_at = f
+            break
+    assert demoted_at is not None, "takeover voice never demoted the held identity"
+
+
+def test_apply_model_hot_swaps_bounds_and_resets(tmp_path):
+    """Gap M1: apply_model must swap the running Gaussians, recompute the Wald
+    bounds, reseed the CFAR background, and invalidate accumulated decisions."""
+    from daredevil.config import IdentityModel
+    rng = random.Random(10)
+    base = _rand_unit(rng)
+    mgr, slot, store = _manager(tmp_path)
+    _enroll(mgr, slot, base)
+    enrolled = store.get("alan")["vector"]
+    for _ in range(2):
+        mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    assert mgr._llr, "expected accumulated evidence before apply"
+    old_A = mgr._A
+    new = IdentityModel(target_mean=0.5, target_std=0.1,
+                        impostor_mean=0.2, impostor_std=0.1,
+                        alpha=0.001, beta=0.05)
+    mgr.apply_model(new)
+    assert mgr.idm is new and mgr.config.identity is new
+    assert mgr._A != old_A and abs(mgr._A - 6.856) < 0.01   # ln(0.95/0.001)
+    assert mgr._bg_mean == 0.2 and not mgr._llr, "accumulators survived hot-apply"

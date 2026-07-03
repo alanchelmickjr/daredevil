@@ -61,6 +61,10 @@ class EnrollmentManager:
         self._B = math.log(self.idm.beta / (1.0 - self.idm.alpha))   # reject identity
         # Cumulative SPRT log-likelihood ratio (a log-odds) per (track, speaker).
         self._llr: Dict[Tuple[str, str], float] = {}
+        # Post-decision contrary-evidence pool (revocable hold, gap B2) and the
+        # one-frame arming state for immediate accepts (2-frame confirm, gap M16).
+        self._revoke: Dict[Tuple[str, str], float] = {}
+        self._imm_pending: Dict[Tuple[str, str], bool] = {}
         # CFAR-style running background model — estimated live from ambient frames so
         # the false-alarm rate stays constant as the room changes. Seeded from the
         # (human-calibrated or default) impostor model.
@@ -80,6 +84,18 @@ class EnrollmentManager:
         return [x / norm for x in mean]
 
     def enroll(self, audio: List[float], sr: int, name: str, seconds: float) -> dict:
+        # Silence/garbage is unenrollable (gap M4): _mean_embedding's fall-back to
+        # the full buffer when no window passes VAD quietly turned dead air into a
+        # "voiceprint" that then participated in every match as candidate + cohort.
+        n = int(sr)  # 1s windows, matching _mean_embedding
+        chunks = [audio] if len(audio) <= n else [audio[i:i + n]
+                                                  for i in range(0, len(audio) - n + 1, n)]
+        voiced = sum(1 for c in chunks if rms(c) > self.config.thresholds.vad)
+        if voiced == 0:
+            raise ValueError(
+                f"enrollment audio for '{name}' contains no voiced windows "
+                f"(all below VAD {self.config.thresholds.vad}) — refusing to "
+                f"store a silence print")
         self.slot.warmup()
         vec = self._mean_embedding(audio, sr)
         conf = enrollment_confidence(seconds, self.tau)
@@ -120,26 +136,53 @@ class EnrollmentManager:
         configured background model is used — that is what lets one enrolled speaker
         be matched at all.
         """
-        if len(others) >= 2:
+        if len(others) >= 1:
+            # AS-Norm cohort — engages from ONE other enrollment (gap M6: the old
+            # >=2 bar meant the documented multi-enrollee defense was dead with two
+            # speakers on the books). Small cohorts blend with the impostor model
+            # so a single other print doesn't over-steer H0.
             scores = [cosine(vector, o) for o in others]
-            mu = sum(scores) / len(scores)
-            var = sum((x - mu) ** 2 for x in scores) / len(scores)
+            blend = scores + [self.idm.impostor_mean]
+            mu = sum(blend) / len(blend)
+            var = sum((x - mu) ** 2 for x in blend) / len(blend)
             sd = math.sqrt(var) if var > 1e-9 else self.idm.impostor_std
             return mu, max(sd, 1e-3)
         if self.idm.adapt_background:
             return self._bg_mean, max(math.sqrt(self._bg_var), 1e-3)
         return self.idm.impostor_mean, self.idm.impostor_std
 
-    def _update_background(self, s: float) -> None:
-        """CFAR update from an ambient frame, with a guard band so a present target
-        (a high cosine) is excluded — otherwise the target would mask itself into
-        the noise estimate, exactly the failure CFAR guard cells prevent."""
-        guard = self.idm.impostor_mean + self.idm.bg_guard_sigmas * self.idm.impostor_std
-        if s > guard:
-            return  # looks like (or near) a target — don't let it pollute the noise floor
-        r = self.idm.bg_adapt_rate
-        self._bg_mean = (1.0 - r) * self._bg_mean + r * s
-        self._bg_var = (1.0 - r) * self._bg_var + r * (s - self._bg_mean) ** 2
+    # Rolling window of censored background samples (gap M5). Size is a tunable-in-
+    # spirit constant: ~2.5 min of voiced frames at the live 0.5s hop.
+    _BG_WINDOW = 300
+
+    def _update_background(self, samples: List[float]) -> None:
+        """Censored rolling estimate of H0 from live frames (gap M5).
+
+        The old EMA guarded on a band anchored to the STATIC seed model — with a
+        silence-fit calibration the guard sat at ~0.09, so every voice-like frame
+        (guest/TV at cos 0.2-0.5) was excluded and the background could never
+        learn what other voices score. The caller censors the decided target's
+        own score; here we additionally drop the top decile of the window as
+        possible target leakage and re-fit mean/var from what remains."""
+        # Hard censor: anything plausibly-target may not teach H0. Without this, the
+        # owner's own pre-decision frames (censoring by decided-flag can't catch
+        # them) enter the window and one strong frame inverts the whole test —
+        # H0 mean jumps to the owner's cosine and true frames read as background.
+        cut = self.idm.target_mean - self.idm.bg_censor_target_sigmas * self.idm.target_std
+        samples = [s for s in samples if s < cut]
+        if not samples:
+            return
+        buf = getattr(self, "_bg_buf", None)
+        if buf is None:
+            buf = self._bg_buf = []
+        buf.extend(samples)
+        if len(buf) > self._BG_WINDOW:
+            del buf[:len(buf) - self._BG_WINDOW]
+        kept = sorted(buf)[: max(1, int(len(buf) * 0.9))]   # censor top decile too
+        mu = sum(kept) / len(kept)
+        var = sum((x - mu) ** 2 for x in kept) / len(kept)
+        self._bg_mean = mu
+        self._bg_var = max(var, 1e-4)
 
     def _maybe_refine(self, rec: dict, vector: Sequence[float], acc: float,
                       raw: float, quality: float) -> None:
@@ -187,17 +230,21 @@ class EnrollmentManager:
         idm = self.idm
 
         best = None
-        raws = []
+        frame_scores: List[Tuple[float, bool]] = []   # (cosine, decided) per speaker
         for rec in records:
             name = rec["name"]
             s = cosine(vector, rec["vector"])
-            raws.append(s)
             others = [v for v in cohort if v is not rec["vector"]]
             mu0, sd0 = self._background_stats(vector, others)
 
             # Per-frame log-likelihood ratio: log p(s|target) - log p(s|background).
             frame_llr = (_log_gaussian(s, idm.target_mean, idm.target_std)
                          - _log_gaussian(s, mu0, sd0))
+            # Clip: a single frame may never carry decision-crossing evidence by
+            # itself (outlier/blip/replay-spike robustness — standard sequential-
+            # test practice). Every accept therefore needs >=2 agreeing frames.
+            _clip = self._A * idm.frame_llr_clip_scale
+            frame_llr = max(-_clip, min(_clip, frame_llr))
 
             kk = (key, name)
             prev = self._llr.get(kk, 0.0)
@@ -209,23 +256,42 @@ class EnrollmentManager:
             # wrong accept permanently un-revokable no matter what later frames say.
             acc = min(acc, 3.0 * self._A)
             if was_decided:
-                # Hysteresis: once identified, hold. LLR never drops below the
-                # acquire threshold. Only explicit track deletion revokes identity.
-                acc = max(acc, self._A)
+                # REVOCABLE hold (gap B2): the reported LLR holds at the acquire
+                # bound for display stability, but post-decision evidence keeps
+                # accumulating UNFLOORED in a parallel pool (contrary frames only).
+                # When that pool runs to the Wald reject bound, the identity is
+                # revoked — a different voice taking over the track demotes in
+                # seconds instead of holding the wrong name forever.
+                pool = self._revoke.get(kk, 0.0) + quality * frame_llr
+                pool = min(pool, 0.0)
+                if pool <= self._B * idm.demote_bound_scale:
+                    log.info("SPRT revoke: track=%s '%s' demoted "
+                             "(post-decision evidence %.2f)", key, name, pool)
+                    self._revoke.pop(kk, None)
+                    acc = 0.0
+                    was_decided = False
+                else:
+                    self._revoke[kk] = pool
+                    acc = max(acc, self._A)
             elif acc <= self._B:
                 acc = 0.0
             self._llr[kk] = acc
 
             posterior = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, acc))))
+            # Immediate accepts need TWO consecutive strong frames before latching
+            # (gaps B2/M16): one loud blip — or one frame of a replayed recording —
+            # arms; only a confirming consecutive frame engages the hold.
+            armed = self._imm_pending.pop(kk, False)
             immediate = s >= idm.immediate_cosine
+            if immediate and not was_decided:
+                if armed:
+                    acc = max(acc, self._A)
+                    self._llr[kk] = acc
+                    self._revoke.pop(kk, None)
+                else:
+                    self._imm_pending[kk] = True
+                    immediate = False
             decided = immediate or acc >= self._A
-            if decided:
-                # Engage the hysteresis hold for immediate (single-frame) accepts too:
-                # a decided identity persists at the acquire bound instead of carrying
-                # llr=0, which both made it flicker off on the next frame and let it
-                # lose the best-candidate tie-break below to a non-match.
-                acc = max(acc, self._A)
-                self._llr[kk] = acc
 
             if idm.adapt_target and quality > 0.0:
                 self._maybe_refine(rec, vector, acc, s, quality)
@@ -236,6 +302,7 @@ class EnrollmentManager:
                 "decided": decided,
                 "enrollment_confidence": rec.get("enrollment_confidence", 1.0),
             }
+            frame_scores.append((s, decided))
             if decided and not was_decided:
                 log.info("SPRT accept: track=%s identified as '%s' (llr=%.2f, cos=%.3f)",
                          key, name, acc, s)
@@ -243,9 +310,18 @@ class EnrollmentManager:
                     best["decided"], best["llr"], best["raw"]):
                 best = cand
 
-        # CFAR: refresh the live noise floor from the most background-like score.
-        if idm.adapt_background and raws and quality > 0.0:
-            self._update_background(min(raws))
+        # Censored background refresh (gap M5): the decided target's own score is
+        # censored by flag; with nothing decided, the best score is censored anyway
+        # (it could be an undecided target). Everything else teaches H0 what the
+        # world's voices actually score — including the TV.
+        if idm.adapt_background and frame_scores and quality > 0.0:
+            if any(d for _, d in frame_scores):
+                samples = [s for s, d in frame_scores if not d]
+            elif len(frame_scores) > 1:
+                samples = sorted(s for s, _ in frame_scores)[:-1]
+            else:
+                samples = [frame_scores[0][0]]
+            self._update_background(samples)
         return best
 
     def is_match(self, m: Optional[dict]) -> bool:
@@ -256,10 +332,41 @@ class EnrollmentManager:
         """Drop SPRT accumulators for tracks that no longer exist."""
         live = set(live_keys)
         self._llr = {(k, n): v for (k, n), v in self._llr.items() if k in live}
+        self._revoke = {(k, n): v for (k, n), v in self._revoke.items() if k in live}
+        self._imm_pending = {(k, n): v for (k, n), v in self._imm_pending.items() if k in live}
 
     def forget_track(self, key: str) -> None:
-        for kk in [kk for kk in self._llr if kk[0] == key]:
-            self._llr.pop(kk, None)
+        for d in (self._llr, self._revoke, self._imm_pending):
+            for kk in [kk for kk in d if kk[0] == key]:
+                d.pop(kk, None)
+
+    def apply_model(self, model) -> None:
+        """Hot-apply a freshly fitted IdentityModel (gap M1): swap the Gaussians,
+        recompute the Wald bounds, reseed the CFAR background, and invalidate all
+        accumulated decisions — they were made under the old model. Without this,
+        a calibration 'saved' to disk silently never governs the running matcher
+        (observed live: llr=4456 runaway eight seconds after 'calibration saved')."""
+        self.config.identity = model
+        self.idm = model
+        self._A = math.log((1.0 - model.beta) / model.alpha)
+        self._B = math.log(model.beta / (1.0 - model.alpha))
+        self._bg_mean = model.impostor_mean
+        self._bg_var = model.impostor_std ** 2
+        self.reset_accumulators()
+        log.info("identity model hot-applied: target=%.3f±%.3f H0=%.3f±%.3f (%s) "
+                 "A=%.2f B=%.2f", model.target_mean, model.target_std,
+                 model.impostor_mean, model.impostor_std,
+                 getattr(model, "h0_source", "?"), self._A, self._B)
+
+    def held_name(self, key: str) -> Optional[str]:
+        """The identity this track currently HOLDS (accumulator at/above the accept
+        bound), or None. Lets coasting tracks keep their name between utterances
+        (gap M7) instead of reverting to UNKNOWN on every pause."""
+        best_name, best_v = None, 0.0
+        for (k, n), v in self._llr.items():
+            if k == key and v >= self._A and v > best_v:
+                best_name, best_v = n, v
+        return best_name
 
     def top_llr(self) -> str:
         """Compact readout of the strongest accumulator (for logging)."""
@@ -277,5 +384,7 @@ class EnrollmentManager:
             self._llr.pop(kk, None)
 
     def reset_accumulators(self) -> None:
-        """Reset all SPRT accumulators (e.g. on scene change)."""
+        """Reset all SPRT accumulators (e.g. on scene change or model hot-apply)."""
         self._llr.clear()
+        self._revoke.clear()
+        self._imm_pending.clear()

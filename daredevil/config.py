@@ -75,6 +75,17 @@ def is_safety_critical(label: str) -> bool:
     return False
 
 
+def is_speech_class(label) -> bool:
+    """True if an event label is human speech, across backend label conventions.
+
+    PANNs emits AudioSet labels verbatim ("Speech", "Male speech, man speaking");
+    the fallback/synthetic paths emit lowercase "speech". Exact lowercase
+    comparison made `active_speaker` and the router's owner-speaking rule
+    permanently dead on the real backend (gap M3) — normalize once, here.
+    """
+    return bool(label) and "speech" in str(label).casefold()
+
+
 @dataclass
 class PriorityWeights:
     """Weights for the composite priority score (patent Eq. 2).
@@ -144,7 +155,16 @@ class IdentityModel:
     alpha: float = 0.01            # tolerable false-accept rate -> upper bound A
     beta: float = 0.05             # tolerable miss rate -> lower bound B
     leak: float = 0.0              # per-frame LLR leak for non-stationarity (0 = pure SPRT)
-    immediate_cosine: float = 0.80 # a single frame this strong matches outright
+    immediate_cosine: float = 0.80 # two consecutive frames this strong match outright
+    demote_bound_scale: float = 2.0  # revoke a held identity when post-decision contrary
+                                     # evidence reaches B*this. 2.0 = symmetric with the
+                                     # 2-frame acquisition: ~2 agreeing frames in, ~2
+                                     # sustained contrary frames out; one borderline frame
+                                     # never kills a hold
+    frame_llr_clip_scale: float = 0.9  # per-frame |LLR| is clipped to A*this: no SINGLE
+                                       # frame (outlier, blip, replay spike) can cross the
+                                       # accept bound alone — a decision always takes >=2
+                                       # frames of agreeing evidence (gaps B2/M16)
     quality_full_energy: float = 0.02  # energy at which a frame carries full evidential weight
     h0_source: str = "default"     # provenance of the impostor stats: "default" (textbook,
                                    # nothing measured) | "room-tone" | "room+world" — recorded
@@ -156,7 +176,11 @@ class IdentityModel:
     # keep H0 — and optionally the voiceprint — tuned as we go.
     adapt_background: bool = True       # online-estimate H0 from live ambient audio
     bg_adapt_rate: float = 0.02         # EMA rate for the running background model
-    bg_guard_sigmas: float = 1.5        # only frames within this band of H0 feed it (CFAR guard cells)
+    bg_guard_sigmas: float = 1.5        # (legacy band; superseded by the censored window)
+    bg_censor_target_sigmas: float = 2.0  # censor background samples above
+                                          # target_mean - this*target_std: plausibly-target
+                                          # frames (e.g. the owner pre-decision) must never
+                                          # teach H0, or one strong frame inverts the test
     adapt_target: bool = False          # online-refine the voiceprint when very confidently matched
     target_adapt_rate: float = 0.05     # EMA rate for adaptive enrollment (guarded)
     target_adapt_margin: float = 2.0    # LLR must clear bound A by this margin before refining

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from .config import Config
+from .config import Config, is_speech_class
 from .audio.capture import capture
 from .audio.utils import resample
 from .stage1.mic_arrays import MicArray, detect as detect_array
@@ -44,6 +44,31 @@ _OPTIONAL_DEPS = [
     "numpy", "scipy", "torch", "torchaudio", "speechbrain", "panns_inference",
     "opensmile", "librosa", "pyroomacoustics", "sounddevice", "soundfile", "matplotlib",
 ]
+
+
+def _dedupe_identity_claims(records: List[dict], enrollment) -> None:
+    """Enforce one live track per identity (gap M15 slice).
+
+    Track splits and held (M7) emissions can leave several tracks claiming the
+    same name at once — the map then shows two of the same person. The claimant
+    carrying live speech this frame wins; runner-up claims are dropped and their
+    accumulators forgotten so they re-decide honestly on their own evidence."""
+    by_name: Dict[str, List[dict]] = {}
+    for r in records:
+        ident = r.get("identity")
+        if ident and ident.get("name"):
+            by_name.setdefault(ident["name"], []).append(r)
+    for name, claims in by_name.items():
+        if len(claims) < 2:
+            continue
+        def rank(r: dict):
+            held = 1 if (r.get("identity") or {}).get("held") else 0
+            speechy = 0 if is_speech_class((r.get("event") or {}).get("class")) else 1
+            return (held, speechy)
+        claims.sort(key=rank)
+        for r in claims[1:]:
+            enrollment.forget_track(r["unknown_id"])
+            r["identity"] = None
 
 
 class Pipeline:
@@ -279,8 +304,15 @@ class Pipeline:
         seen_ids = {r["unknown_id"] for r in records}
         for t in self.tracker._tracks:
             if t["id"] not in seen_ids:
+                # A held identity persists across silent frames (gap M7): the SPRT
+                # hold survives, so the display and LLM payload must not contradict
+                # it by calling the owner UNKNOWN every time they pause.
+                held = self.enrollment.held_name(t["id"])
                 records.append({
-                    "identity": None, "unknown_id": t["id"],
+                    "identity": ({"name": held, "score": 0.99,
+                                  "enrollment_confidence": 1.0, "held": True}
+                                 if held else None),
+                    "unknown_id": t["id"],
                     "event": {"class": t.get("event_class") or "unknown",
                               "confidence": 0.0, "safety_critical": False},
                     "prosody": {"state": "calm", "distress": 0.0},
@@ -288,6 +320,12 @@ class Pipeline:
                     if t.get("azimuth") is not None else None,
                     "track_status": t["status"],
                 })
+
+        # One person = one track (gap M15 slice): when several tracks claim the
+        # same identity, the one carrying live speech keeps it and stale claimants
+        # are forgotten — otherwise the map shows two of the same person (observed
+        # live: a Speech track AND a leftover white-noise track both named Alan).
+        _dedupe_identity_claims(records, self.enrollment)
 
         # Forget SPRT accumulators for contacts that have aged out.
         self.enrollment.retain(self.tracker.live_ids())

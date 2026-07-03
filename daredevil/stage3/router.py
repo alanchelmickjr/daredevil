@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-from ..config import Config
+from ..config import Config, is_speech_class
 
 log = logging.getLogger("daredevil.router")
 
@@ -85,7 +85,7 @@ class AttentionRouter:
         # override, the enrolled owner actually speaking (directed), or anything
         # above the surface threshold. Everything else is "ambient" — heard,
         # tracked, and deliberately NOT sent into the conversation.
-        directed = enrolled and ev.get("class") == "speech"
+        directed = enrolled and is_speech_class(ev.get("class"))
         surfaced = bool(override) or directed or (priority >= self.th.surface)
 
         # Why are we paying attention? Hand the reason to the LLM/robot so it can act
@@ -109,6 +109,11 @@ class AttentionRouter:
 
         src = {
             "id": ident["name"] if enrolled else r.get("unknown_id", "UNKNOWN-000"),
+            # The stable underlying track key: when an UNKNOWN gets identified its
+            # display id RENAMES, and everything keyed on the old id (audio
+            # buffers, UI cards, focus, transcripts) would orphan. Data carries
+            # forward on this key instead.
+            "track": r.get("unknown_id", "UNKNOWN-000"),
             "type": "enrolled" if enrolled else "unknown",
             "attention": "surface" if surfaced else "ambient",
             "event": event_out,
@@ -117,10 +122,13 @@ class AttentionRouter:
         }
         if enrolled:
             src["identity"] = {
+                "name": ident["name"],
                 "confidence": round(s_identity, 3),
                 "match_score": round(ident["score"], 3),
                 "enrollment_confidence": round(ident.get("enrollment_confidence", 1.0), 3),
             }
+            if ident.get("held"):
+                src["identity"]["held"] = True
         pos = r.get("position")
         if pos and pos.get("azimuth") is not None:
             src["position"] = {"azimuth": pos["azimuth"], "elevation": pos.get("elevation", 0.0)}
