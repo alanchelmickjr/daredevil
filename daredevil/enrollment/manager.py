@@ -79,7 +79,8 @@ class EnrollmentManager:
         norm = math.sqrt(sum(x * x for x in mean)) or 1.0
         return [x / norm for x in mean]
 
-    def enroll(self, audio: List[float], sr: int, name: str, seconds: float) -> dict:
+    def enroll(self, audio: List[float], sr: int, name: str, seconds: float,
+               provisional: bool = False) -> dict:
         self.slot.warmup()
         vec = self._mean_embedding(audio, sr)
         conf = enrollment_confidence(seconds, self.tau)
@@ -102,6 +103,7 @@ class EnrollmentManager:
             "enrollment_confidence": round(conf, 4),
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "backend": self.slot.backend,
+            "provisional": provisional or bool(existing and existing.get("provisional")),
         }
         self.store.put(name, record)
         log.info("enrolled '%s': dim=%d, conf=%.3f, n_samples=%d, backend=%s",
@@ -262,6 +264,34 @@ class EnrollmentManager:
         self.store.delete(name)
         for kk in [kk for kk in self._llr if kk[1] == name]:
             self._llr.pop(kk, None)
+
+    def rename(self, old: str, new: str):
+        """Rename a (usually provisional) voiceprint in place. On collision with an
+        existing print, MERGE the old evidence into it (Welford, sample-weighted)."""
+        rec = self.store.get(old)
+        if rec is None:
+            return None
+        target = self.store.get(new)
+        if target is not None and target.get("n_samples"):
+            n_old, n_add = target.get("n_samples", 1), rec.get("n_samples", 1)
+            n = n_old + n_add
+            m = min(len(target["vector"]), len(rec["vector"]))
+            merged = [(target["vector"][i] * n_old + rec["vector"][i] * n_add) / n
+                      for i in range(m)]
+            nrm = math.sqrt(sum(x * x for x in merged)) or 1.0
+            target["vector"] = [x / nrm for x in merged]
+            target["n_samples"] = n
+            self.store.put(new, target)
+        else:
+            rec["name"] = new
+            rec.pop("provisional", None)
+            rec.pop("name_declined", None)
+            self.store.put(new, rec)
+        self.store.delete(old)
+        for kk in [k for k in self._llr if k[1] == old]:
+            self._llr[(kk[0], new)] = self._llr.pop(kk)
+        log.info("renamed voiceprint '%s' -> '%s'", old, new)
+        return self.store.get(new)
 
     def reset_accumulators(self) -> None:
         """Reset all SPRT accumulators (e.g. on scene change)."""
