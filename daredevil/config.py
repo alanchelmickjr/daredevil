@@ -146,6 +146,10 @@ class IdentityModel:
     leak: float = 0.0              # per-frame LLR leak for non-stationarity (0 = pure SPRT)
     immediate_cosine: float = 0.80 # a single frame this strong matches outright
     quality_full_energy: float = 0.02  # energy at which a frame carries full evidential weight
+    h0_source: str = "default"     # provenance of the impostor stats: "default" (textbook,
+                                   # nothing measured) | "room-tone" | "room+world" — recorded
+                                   # in calibration.json so a silence-fit H0 is never mistaken
+                                   # for one that has heard other voices (gap B1)
 
     # --- real-time auto-calibration (CFAR: hold the false-alarm rate constant as
     # the room changes). The human onboarding session seeds the first model; these
@@ -392,6 +396,8 @@ class Config:
     capture_rate: int = 48000      # native laptop/UAC2 rate
     inference_sr: int = 16000      # rate the models were trained at
     window_seconds: float = 1.0    # analysis window fed to every slot
+    hop_seconds: float = 0.5       # continuous-stream hop: new analysis every hop, on the
+                                   # trailing window_seconds of audio (viz/stream.py)
 
     # slots
     enabled_slots: tuple = ("embedding", "events", "prosody")

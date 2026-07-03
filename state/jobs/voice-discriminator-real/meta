@@ -1,0 +1,8 @@
+ID=voice-discriminator-real
+GOAL=Close all verified gaps: working real-time voice discriminator on the M2 per docs/GAP_VOICE_DISCRIMINATOR.md
+CREATED=2026-07-02T15:21:51-0700
+DONE_WHEN=All 8 acceptance criteria in docs/GAP_VOICE_DISCRIMINATOR.md 'Definition of done' observed passing on live hardware, each logged with evidence in the chronicle
+MAX_ITERS=44
+STATUS=active
+COUNT=1
+UPDATED=2026-07-02T16:14:06-0700

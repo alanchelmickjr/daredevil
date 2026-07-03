@@ -157,3 +157,35 @@ def test_tracker_confirms_after_m_hits():
     assert t.status_of(sid) == "tentative"
     t.assign(list(v))                       # second hit -> M-of-N confirm
     assert t.status_of(sid) == "confirmed"
+
+
+# --- regression: decided candidate must win best-selection (2026-07-01) ------
+
+def test_immediate_accept_beats_earlier_nonmatch_in_cohort(tmp_path):
+    """With two enrolled speakers, an immediate (high-cosine) accept for the
+    SECOND speaker must not lose the best-candidate slot to the first speaker's
+    non-match on an llr tie. Regression: live 'alan' scored cos=0.806 (decided)
+    but the map surfaced Emerson's cos=0.156 with identity null."""
+    rng = random.Random(7)
+    a, b = _rand_unit(rng), _rand_unit(rng)
+    mgr, slot, store = _manager(tmp_path)
+    _enroll(mgr, slot, a, name="Emerson")
+    _enroll(mgr, slot, b, name="alan")
+    enrolled = store.get("alan")["vector"]
+    m = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    assert mgr.is_match(m), "decided candidate was dropped from best-selection"
+    assert m["name"] == "alan"
+
+
+def test_immediate_accept_engages_hysteresis_hold(tmp_path):
+    """An immediate accept must persist at the acquire bound: identity holds on
+    the NEXT frame even if that frame's cosine dips to borderline."""
+    rng = random.Random(8)
+    base = _rand_unit(rng)
+    mgr, slot, store = _manager(tmp_path)
+    _enroll(mgr, slot, base)
+    enrolled = store.get("alan")["vector"]
+    m1 = mgr.match(_at_cosine(0.85, enrolled, rng), energy=0.05, key="t1")
+    assert mgr.is_match(m1)
+    m2 = mgr.match(_at_cosine(0.30, enrolled, rng), energy=0.05, key="t1")
+    assert mgr.is_match(m2) and m2["name"] == "alan", "identity flickered off after immediate accept"

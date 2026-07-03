@@ -22,6 +22,9 @@ from .viz.spatial_map import render_ascii
 def _cmd_enroll(args) -> int:
     pipe = Pipeline()
     source = "live" if args.live else "synthetic"
+    if source == "synthetic":
+        print(f"WARNING: enrolling '{args.name}' from SYNTHETIC audio (no --live flag). "
+              f"This voiceprint will NOT match a real person. Use --live to enroll a real voice.")
     res = pipe.enroll(args.name, mic_seconds=args.seconds, source=source)
     print(f"enrolled '{res['name']}'  confidence={res['enrollment_confidence']:.3f}  "
           f"backend={res['backend']}  dim={res['dim']}")
@@ -128,7 +131,9 @@ def main(argv=None) -> int:
     pc.add_argument("--name", default=None)
     pc.add_argument("-s", "--seconds", type=float, default=20.0)
     pc.add_argument("--live", action="store_true")
-    pc.add_argument("--others", action="store_true", help="also sample a TV / second voice (live)")
+    pc.add_argument("--others", action=argparse.BooleanOptionalAction, default=True,
+                    help="sample a TV / second voice in the world phase — the impostor "
+                         "model is fit on this, so it is ON by default (--no-others to skip)")
 
     pl = sub.add_parser("listen", help="emit one awareness map")
     pl.add_argument("--duration", type=float, default=1.0)

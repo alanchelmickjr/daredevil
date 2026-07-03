@@ -43,6 +43,7 @@ class _CalibrationSession:
         self._voiceprint = None
         self._target_cos: list = []
         self._bg_cos: list = []
+        self._world_ran = False
         self.status = self._idle_status()
 
     def _idle_status(self) -> dict:
@@ -62,6 +63,7 @@ class _CalibrationSession:
             self._voiceprint = None
             self._target_cos = []
             self._bg_cos = []
+            self._world_ran = False
             self.status = {
                 "active": True, "phase": "ready", "phase_index": 0,
                 "countdown": 0, "elapsed": 0.0, "duration": seconds,
@@ -96,6 +98,19 @@ class _CalibrationSession:
         return None
 
     def _run_phase(self, phase: str):
+        # M2 slice: a phase failure must NEVER freeze the screen — the observed
+        # failure mode was a dead daemon thread leaving active:true forever, the
+        # awareness path paused, and zero surfaced error (PortAudio -9986, 2026-07-02).
+        try:
+            self._run_phase_inner(phase)
+        except Exception as e:
+            log.exception("calibration phase '%s' failed", phase)
+            self.status.update({
+                "active": False, "phase": "error", "countdown": 0,
+                "prompt": f"Calibration failed during {phase}: {e} — live view resumed, RE-RUN when ready.",
+            })
+
+    def _run_phase_inner(self, phase: str):
         # Enough text to fill 20s of natural reading at conversational pace.
         # Diverse prosody: questions, statements, counting, whispering cue.
         prompts = {
@@ -140,7 +155,11 @@ class _CalibrationSession:
         cal = Calibrator(self.pipe)
         source = "live" if self.state.live else "synthetic"
         seconds = self._seconds
-        chunk = 0.5
+        # The mic has ONE owner: the stream loop. Calibration BORROWS its chunks
+        # (chunk size = the loop's hop) — opening a second input stream is what
+        # killed the 2026-07-02 session (PortAudio -9986).
+        stream = self.state.stream if self.state.live else None
+        chunk = self.pipe.config.hop_seconds if stream else 0.5
         n_chunks = int(seconds / chunk)
         all_audio: list = []
         sr = None
@@ -148,29 +167,49 @@ class _CalibrationSession:
         if phase == "voice" and self.pipe.store.get(self._name):
             self.pipe.store.delete(self._name)
 
-        for i in range(n_chunks):
-            self.status["elapsed"] = i * chunk
-            scene = None if self.state.live else (
-                None if phase == "voice" else _AMBIENT_SCENE)
-            audio, sample_rate, level, _ = cal.capture_audio(
-                chunk, source,
-                name=(self._name if phase == "voice" else None),
-                scene=scene,
-            )
-            sr = sample_rate
-            all_audio.extend(audio)
-            self.status["level"] = min(1.0, level / 0.15)
+        if stream:
+            stream.borrow_start()
+        try:
+            for i in range(n_chunks):
+                self.status["elapsed"] = i * chunk
+                if stream:
+                    from ..audio.utils import to_mono, resample, rms as _rms_lvl
+                    channels, sample_rate = stream.borrow_chunk(timeout=chunk * 8 + 2)
+                    mono = to_mono(channels)
+                    level = _rms_lvl(mono)
+                    audio = resample(mono, sample_rate, self.pipe.config.inference_sr)
+                    sample_rate = self.pipe.config.inference_sr
+                else:
+                    scene = None if self.state.live else (
+                        None if phase == "voice" else _AMBIENT_SCENE)
+                    audio, sample_rate, level, _ = cal.capture_audio(
+                        chunk, source,
+                        name=(self._name if phase == "voice" else None),
+                        scene=scene,
+                    )
+                sr = sample_rate
+                all_audio.extend(audio)
+                self.status["level"] = min(1.0, level / 0.15)
+        finally:
+            if stream:
+                stream.borrow_end()
 
         self.status["elapsed"] = seconds
         self.status["level"] = 0.0
 
         if phase == "voice":
-            enr = self.pipe.enrollment.enroll(all_audio, sr, self._name, seconds)
+            # Held-out split (gap B1): enroll on the first half, measure target
+            # cosines on the second half the print has never seen. Train-on-test
+            # inflated target_mean and hid real same-speaker variance.
+            half = len(all_audio) // 2
+            enr = self.pipe.enrollment.enroll(all_audio[:half], sr, self._name, seconds / 2)
             self._voiceprint = self.pipe.store.get(self._name)["vector"]
-            self._target_cos = cal.cosines_to(all_audio, sr, self._voiceprint)
+            self._target_cos = cal.cosines_to(all_audio[half:], sr, self._voiceprint)
             self.status["voice_frames"] = len(self._target_cos)
             self.status["prompt"] = f"Got you! {len(self._target_cos)} voice frames."
         elif phase in ("background", "world"):
+            if phase == "world":
+                self._world_ran = True
             if self._voiceprint:
                 cos = cal.cosines_to(all_audio, sr, self._voiceprint)
                 self._bg_cos.extend(cos)
@@ -183,8 +222,14 @@ class _CalibrationSession:
 
         self.status["phase"] = "fitting"
         cal = Calibrator(self.pipe)
-        model, dprime = cal.fit(self._target_cos, self._bg_cos)
+        h0 = "room+world" if (self._world_ran and self._bg_cos) else "room-tone"
+        model, dprime = cal.fit(self._target_cos, self._bg_cos, h0_source=h0)
         cal.save(model)
+        # A new fit invalidates every accumulated identity decision: without this,
+        # tracks latched (hysteresis) under the OLD model keep their old names
+        # forever and the newly calibrated person can never win those tracks.
+        # (First slice of gap M1 hot-apply; full apply_model() lands with step 3.)
+        self.pipe.enrollment.reset_accumulators()
         err = _dprime_error_pct(dprime)
         quality = "good" if dprime >= 2.5 else ("fair" if dprime >= 1.5 else "poor")
 
@@ -228,6 +273,23 @@ class _State:
         from .transcriber import Transcriber
         self.transcriber = Transcriber()
         self.cal = _CalibrationSession(self)
+        # Continuous listening (gap B3): live mode runs a server-side capture+inference
+        # loop; /awareness becomes a snapshot read. Synthetic/demo keeps the old
+        # on-demand path (no mic, no thread).
+        self.stream = None
+        if live:
+            from .stream import StreamLoop
+            cfg = self.pipe.config
+            self.stream = StreamLoop(
+                read_chunk=self._read_chunk,
+                analyze=self._analyze_window,
+                window_seconds=cfg.window_seconds,
+                hop_seconds=cfg.hop_seconds,
+                # No pause hook: the reader must keep reading during calibration —
+                # calibration borrows its chunks (single mic owner). While a borrow
+                # is active the ring is empty, so analysis idles on its own.
+            )
+            self.stream.start()
 
     def set_focus(self, source_id: str):
         """Set the focused source — only this source gets transcribed and routed to the LLM."""
@@ -279,7 +341,30 @@ class _State:
         except Exception as e:
             log.warning(f"bg_transcribe: {e}")
 
+    def _read_chunk(self):
+        """Blocking hop-sized read from the persistent mic stream (stream-loop reader)."""
+        from ..audio.capture import capture_live
+        cap = capture_live(seconds=self.pipe.config.hop_seconds,
+                           sr=self.pipe.config.capture_rate, array=self.pipe.array)
+        return cap.channels, cap.sample_rate, cap.array
+
+    def _analyze_window(self, channels, sr, array):
+        """Analyze one trailing window from the ring (stream-loop inferer)."""
+        from ..audio.capture import CaptureResult
+        cap = CaptureResult(channels=channels, sample_rate=sr,
+                            array=array or self.pipe.array, source="live")
+        amap, audio, out_sr = self.pipe.process_capture(cap, return_audio=True)
+        self._postprocess(amap, audio, out_sr)
+
     def awareness(self) -> dict:
+        # Live mode: the stream loop analyzes continuously; this is a snapshot read.
+        if self.stream is not None:
+            if self._last is not None:
+                return self._last
+            return {"sources": [], "timing": {}, "privacy": {
+                "cloud_used": False, "raw_audio_stored": False,
+                "embeddings": "non-reversible"}}
+        # Synthetic/demo: original on-demand path.
         if self.cal.status["active"] or self._busy:
             if self._last is not None:
                 return self._last
@@ -288,59 +373,63 @@ class _State:
                 "embeddings": "non-reversible"}}
         self._busy = True
         try:
-            # DETECTION — the spine. Always runs, never blocked by transcription.
-            amap, audio, sr = self.pipe.listen(duration=1.0, source=self.source,
+            amap, audio, sr = self.pipe.listen(duration=self.pipe.config.window_seconds,
+                                               source=self.source,
                                                return_audio=True,
                                                scene=self._scene)
-            amap["wake_word"] = self.pipe.config.wake_word
-            amap["focus"] = self._focus_id
-            amap["top_llr"] = self.pipe.enrollment.top_llr()
-
-            # active_speaker: the highest-priority enrolled source currently
-            # speaking. Dexter uses this to know WHO is talking right now
-            # without parsing the full sources array.
-            active = None
-            for s in amap.get("sources", []):
-                if (s.get("type") == "enrolled"
-                        and s.get("attention") == "surface"
-                        and s.get("event", {}).get("class") == "speech"):
-                    if active is None or s["priority"] > active["priority"]:
-                        active = s
-            amap["active_speaker"] = {
-                "id": active["id"],
-                "confidence": active.get("identity", {}).get("confidence", 0),
-                "azimuth": active.get("position", {}).get("azimuth"),
-                "priority": active["priority"],
-            } if active else None
-
-            # Surface any previously-completed STT/LLM results.
-            if self._transcript:
-                amap["transcript"] = self._transcript
-                self._transcript = None
-            if self._llm_response:
-                amap["llm_response"] = self._llm_response
-                self._llm_response = None
-
-            self._last = amap
-
-            # TRANSCRIPTION — feed audio, flush in background thread.
-            try:
-                if self._focus_id and audio:
-                    from ..audio.utils import rms as _rms_check
-                    energy = _rms_check(audio)
-                    is_speaking = energy > self.pipe.config.thresholds.vad * 3
-                    self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
-                    if self._stt_thread is None or not self._stt_thread.is_alive():
-                        self._stt_thread = threading.Thread(
-                            target=self._bg_transcribe, args=(audio, sr, amap),
-                            daemon=True)
-                        self._stt_thread.start()
-            except Exception as e:
-                log.warning(f"transcription error: {e}")
-
-            return amap
+            return self._postprocess(amap, audio, sr)
         finally:
             self._busy = False
+
+    def _postprocess(self, amap: dict, audio, sr) -> dict:
+        """Shared map decoration + STT feed for both the stream loop and the demo path."""
+        amap["wake_word"] = self.pipe.config.wake_word
+        amap["focus"] = self._focus_id
+        amap["top_llr"] = self.pipe.enrollment.top_llr()
+
+        # active_speaker: the highest-priority enrolled source currently
+        # speaking. Dexter uses this to know WHO is talking right now
+        # without parsing the full sources array.
+        active = None
+        for s in amap.get("sources", []):
+            if (s.get("type") == "enrolled"
+                    and s.get("attention") == "surface"
+                    and s.get("event", {}).get("class") == "speech"):
+                if active is None or s["priority"] > active["priority"]:
+                    active = s
+        amap["active_speaker"] = {
+            "id": active["id"],
+            "confidence": active.get("identity", {}).get("confidence", 0),
+            "azimuth": active.get("position", {}).get("azimuth"),
+            "priority": active["priority"],
+        } if active else None
+
+        # Surface any previously-completed STT/LLM results.
+        if self._transcript:
+            amap["transcript"] = self._transcript
+            self._transcript = None
+        if self._llm_response:
+            amap["llm_response"] = self._llm_response
+            self._llm_response = None
+
+        self._last = amap
+
+        # TRANSCRIPTION — feed audio, flush in background thread.
+        try:
+            if self._focus_id and audio:
+                from ..audio.utils import rms as _rms_check
+                energy = _rms_check(audio)
+                is_speaking = energy > self.pipe.config.thresholds.vad * 3
+                self.transcriber.feed(self._focus_id, audio, sr, is_speaking)
+                if self._stt_thread is None or not self._stt_thread.is_alive():
+                    self._stt_thread = threading.Thread(
+                        target=self._bg_transcribe, args=(audio, sr, amap),
+                        daemon=True)
+                    self._stt_thread.start()
+        except Exception as e:
+            log.warning(f"transcription error: {e}")
+
+        return amap
 
 
 def _make_handler(state: _State):

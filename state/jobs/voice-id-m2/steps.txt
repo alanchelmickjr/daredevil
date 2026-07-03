@@ -1,0 +1,3 @@
+live WHO: daredevil listen / serve --live while Alan talks; verify the awareness map names 'alan' with SPRT confirm
+restart persistence: kill the process, start a fresh one, verify 'alan' is still recognized (this is the DONE_WHEN observation)
+if confirm is slow/flaky: auto-load calibration into SPRT (the known gap in calibrate.py) and re-verify

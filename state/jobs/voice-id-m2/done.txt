@@ -1,0 +1,4 @@
+- 2026-07-01T19:32:52-0700 dispatched: step zero: conda run -n daredevil python -m daredevil devices — record built-in mic max_input_channels and installed backends
+- 2026-07-01T19:33:37-0700 dispatched: baseline: conda run -n daredevil python -m pytest -q in the daredevil repo — expect ~32 passing; record actual
+- 2026-07-01T19:36:53-0700 dispatched: verify real ECAPA loads on M2 (torch CPU/MPS) and computes an embedding from a wav — no cloud, no fallback fingerprint
+- 2026-07-01T19:38:45-0700 dispatched: enroll Alan: daredevil enroll (Alan speaks — multi-sample if available); verify voiceprint file lands in ~/.daredevil/voiceprints/

@@ -141,6 +141,14 @@ class Pipeline:
         self.warmup()
         cap = capture(seconds=duration, sr=self.config.capture_rate,
                       source=source, file=file, array=self.array, scene=scene)
+        return self.process_capture(cap, return_audio=return_audio,
+                                    measure_sequential=measure_sequential)
+
+    def process_capture(self, cap, return_audio: bool = False,
+                        measure_sequential: bool = False):
+        """Run stages 1-3 on an already-captured window. Split out of listen() so the
+        continuous stream loop (viz/stream.py) can analyze ring-buffer windows without
+        opening the mic itself; listen() keeps its one-shot capture semantics."""
         from .audio.utils import rms as _rms_fn
         log.info(f"capture: {cap.source} {cap.duration:.1f}s rms={_rms_fn(cap.mono):.4f}")
         spatial_sources: List[SpatialSource] = self.stage1.process(cap)

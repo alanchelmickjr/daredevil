@@ -203,6 +203,11 @@ class EnrollmentManager:
             prev = self._llr.get(kk, 0.0)
             was_decided = prev >= self._A
             acc = (1.0 - idm.leak) * prev + quality * frame_llr
+            # Cap the evidence pool at 3x the accept bound. SPRT's decision is made at
+            # _A; stacking beyond that is numerically meaningless and, observed live,
+            # runs away (llr ~7000 with a calibrated model + leak=0), which makes a
+            # wrong accept permanently un-revokable no matter what later frames say.
+            acc = min(acc, 3.0 * self._A)
             if was_decided:
                 # Hysteresis: once identified, hold. LLR never drops below the
                 # acquire threshold. Only explicit track deletion revokes identity.
@@ -214,6 +219,13 @@ class EnrollmentManager:
             posterior = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, acc))))
             immediate = s >= idm.immediate_cosine
             decided = immediate or acc >= self._A
+            if decided:
+                # Engage the hysteresis hold for immediate (single-frame) accepts too:
+                # a decided identity persists at the acquire bound instead of carrying
+                # llr=0, which both made it flicker off on the next frame and let it
+                # lose the best-candidate tie-break below to a non-match.
+                acc = max(acc, self._A)
+                self._llr[kk] = acc
 
             if idm.adapt_target and quality > 0.0:
                 self._maybe_refine(rec, vector, acc, s, quality)
@@ -227,7 +239,8 @@ class EnrollmentManager:
             if decided and not was_decided:
                 log.info("SPRT accept: track=%s identified as '%s' (llr=%.2f, cos=%.3f)",
                          key, name, acc, s)
-            if best is None or cand["llr"] > best["llr"]:
+            if best is None or (cand["decided"], cand["llr"], cand["raw"]) > (
+                    best["decided"], best["llr"], best["raw"]):
                 best = cand
 
         # CFAR: refresh the live noise floor from the most background-like score.

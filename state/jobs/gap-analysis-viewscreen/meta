@@ -1,0 +1,8 @@
+ID=gap-analysis-viewscreen
+GOAL=Full review of viewscreen + calibration; gap analysis to a working real-time voice discriminator
+MAX_ITERS=25
+CREATED=2026-07-01T21:19:11-0700
+DONE_WHEN=daredevil/docs/GAP_VOICE_DISCRIMINATOR.md exists; every gap cited to file:line; claims adversarially verified
+COUNT=3
+STATUS=done
+UPDATED=2026-07-02T03:21:54-0700

@@ -61,20 +61,32 @@ class Calibrator:
         return out
 
     # --- fit + persist ----------------------------------------------------
-    def fit(self, target_cos: List[float], bg_cos: List[float]) -> Tuple[IdentityModel, float]:
+    def fit(self, target_cos: List[float], bg_cos: List[float],
+            h0_source: str = "room-tone") -> Tuple[IdentityModel, float]:
         base = self.cfg.identity
+        # Textbook = the dataclass defaults (published ECAPA/VoxCeleb stats) — NOT
+        # `base`, which may itself be a previously loaded calibration.
+        textbook = IdentityModel()
         tm = statistics.fmean(target_cos) if target_cos else base.target_mean
         ts = statistics.pstdev(target_cos) if len(target_cos) > 1 else base.target_std
         if bg_cos:
             im = statistics.fmean(bg_cos)
-            istd = statistics.pstdev(bg_cos) if len(bg_cos) > 1 else base.impostor_std
+            istd = statistics.pstdev(bg_cos) if len(bg_cos) > 1 else textbook.impostor_std
+            # Floor H0 at the textbook different-speaker stats (gap B1): a fit from
+            # silence/room tone alone models "not-you" as cosine ~0.0, which makes any
+            # human voice (0.2-0.5 vs a real print) read as the owner. Measured stats
+            # may only make H0 *harder* than textbook, never easier.
+            im = max(im, textbook.impostor_mean)
+            istd = max(istd, textbook.impostor_std)
         else:
-            im, istd = base.impostor_mean, base.impostor_std
+            im, istd = textbook.impostor_mean, textbook.impostor_std
+            h0_source = "default"
         ts, istd = max(ts, 0.03), max(istd, 0.03)   # floor std so the model isn't over-confident
 
         model = IdentityModel(
             target_mean=round(tm, 4), target_std=round(ts, 4),
             impostor_mean=round(im, 4), impostor_std=round(istd, 4),
+            h0_source=h0_source,
             # carry policy/behaviour knobs through unchanged
             alpha=base.alpha, beta=base.beta, leak=base.leak,
             immediate_cosine=base.immediate_cosine,
@@ -85,10 +97,15 @@ class Calibrator:
             target_adapt_margin=base.target_adapt_margin,
         )
         # d-prime: how separable the two distributions are (higher = cleaner).
-        denom = ((ts * ts + istd * istd) / 2.0) ** 0.5
-        dprime = round((tm - im) / denom, 2) if denom > 0 else 0.0
-        log.info("calibration fit: target=%.3f±%.3f, bg=%.3f±%.3f, d'=%.2f",
-                 tm, ts, im, istd, dprime)
+        # A d′ against a DEFAULTED H0 is not a measurement — refuse to report one
+        # (0.0 keeps the load gate closed rather than flattering an unmeasured model).
+        if h0_source == "default":
+            dprime = 0.0
+        else:
+            denom = ((ts * ts + istd * istd) / 2.0) ** 0.5
+            dprime = round((tm - im) / denom, 2) if denom > 0 else 0.0
+        log.info("calibration fit: target=%.3f±%.3f, bg=%.3f±%.3f, d'=%.2f (H0: %s)",
+                 tm, ts, im, istd, dprime, h0_source)
         return model, dprime
 
     def save(self, model: IdentityModel) -> str:
@@ -126,7 +143,7 @@ def _level_note(level: float, h=None) -> str:
 
 
 def session(name: Optional[str] = None, live: bool = False, seconds: float = 20.0,
-            others: bool = False, config: Optional[Config] = None) -> dict:
+            others: bool = True, config: Optional[Config] = None) -> dict:
     """Run the onboarding session. Returns {model, dprime, path, stats}.
 
     Non-interactive (synthetic / tests) runs straight through; live mode pauses
@@ -156,15 +173,32 @@ def session(name: Optional[str] = None, live: bool = False, seconds: float = 20.
     if pipe.store.get(name):
         pipe.store.delete(name)
 
-    # --- Phase 1: your voice (fresh enrollment + measure same-speaker cosine)
-    # ONE recording, used for both enrollment and verification measurement.
+    # --- Phase 1: your voice — held-out split (gap B1): the FIRST half of the
+    # recording builds the print, the SECOND half (never seen by enrollment)
+    # measures the same-speaker cosines. Train-on-test inflated target stats.
     print("▶ 1/3  SPEAK — talk to me like I'm across the table")
-    print('   Say anything — what you had for breakfast, curse at the traffic, whatever.')
-    wait("   ↵ press Enter, then talk… ")
+    print('   Say anything — or read this (about 25 seconds, natural pace):')
+    # Interim onboarding aid: continuous read-aloud text so the capture gets steady
+    # speech instead of pauses and keyboard noise. The end state is real-time ambient
+    # convergence — identity settling while people just talk — and this script goes
+    # away once that lands.
+    print("""
+   ┌──────────────────────────────────────────────────────────────────┐
+   │ "Daredevil is my ears. Cameras stop at the first wall — sound    │
+   │  doesn't. It bends around corners, slips under doors, and       │
+   │  carries for miles. Right now it is measuring the shape of my   │
+   │  voice — not my words, my timbre — so it can pick me out of a   │
+   │  noisy room, greet me by name, and hand its robots a living map │
+   │  of who is speaking, where they stand, and how they sound.      │
+   │  Everything it hears stays on this machine. Private by default, │
+   │  awake by design — the sense that never needed light."          │
+   └──────────────────────────────────────────────────────────────────┘""")
+    wait("   ↵ press Enter, then read/talk… ")
     audio, sr, level, synth = cal.capture_audio(seconds, source, name=name)
-    enr = pipe.enrollment.enroll(audio, sr, name, seconds)
+    half = len(audio) // 2
+    enr = pipe.enrollment.enroll(audio[:half], sr, name, seconds / 2)
     voiceprint = pipe.store.get(name)["vector"]
-    target_cos = cal.cosines_to(audio, sr, voiceprint)
+    target_cos = cal.cosines_to(audio[half:], sr, voiceprint)   # held-out half only
     print(f"   ✓ got you — {_level_note(level)}  (level {level:.2f}, "
           f"{len(target_cos)} voice frames, conf {enr['enrollment_confidence']:.2f})")
 
@@ -191,7 +225,8 @@ def session(name: Optional[str] = None, live: bool = False, seconds: float = 20.
         print("\n▶ 3/3  THE WORLD — skipped (room tone only)")
 
     # --- fit + save -------------------------------------------------------
-    model, dprime = cal.fit(target_cos, bg_cos)
+    h0 = "room+world" if (others and live) else "room-tone"
+    model, dprime = cal.fit(target_cos, bg_cos, h0_source=h0)
     path = cal.save(model)
 
     err = _dprime_error_pct(dprime)

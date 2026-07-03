@@ -1,0 +1,8 @@
+ID=voice-id-m2
+GOAL=Daredevil knows Alan's voice on this M2 MacBook — live speaker ID, persistent across restarts
+MAX_ITERS=25
+CREATED=2026-07-01T19:29:34-0700
+DONE_WHEN=A live run on this M2 identifies enrolled speaker 'alan' by name in the awareness map, in a NEW process after the enrolling one exited
+STATUS=active
+COUNT=4
+UPDATED=2026-07-01T19:38:45-0700

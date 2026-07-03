@@ -43,13 +43,22 @@ def _poll_phase(base, target_phase, timeout=60):
 
 
 @pytest.fixture(scope="module")
-def server_url():
-    """Start the HUD server in a background thread on an ephemeral port."""
+def server_url(tmp_path_factory):
+    """Start the HUD server in a background thread on an ephemeral port.
+
+    DAREDEVIL_HOME points at a throwaway dir for the whole module: this flow
+    really enrolls ('testperson') and really writes calibration, and without
+    isolation those land in the developer's actual ~/.daredevil store
+    (observed in the wild, 2026-07-01)."""
+    import os
     from http.server import ThreadingHTTPServer
     from daredevil.config import Config
     from daredevil.pipeline import Pipeline
     from daredevil.stage1.mic_arrays import MACBOOK_3
     from daredevil.viz.server import _make_handler, _State
+
+    _old_home = os.environ.get("DAREDEVIL_HOME")
+    os.environ["DAREDEVIL_HOME"] = str(tmp_path_factory.mktemp("daredevil-home"))
 
     state = _State(live=False)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(state))
@@ -66,6 +75,10 @@ def server_url():
             time.sleep(0.5)
     yield base
     httpd.shutdown()
+    if _old_home is None:
+        os.environ.pop("DAREDEVIL_HOME", None)
+    else:
+        os.environ["DAREDEVIL_HOME"] = _old_home
 
 
 def test_awareness_returns_json(server_url):
@@ -105,20 +118,23 @@ def test_full_calibration_flow(server_url):
     assert status["dprime"] is not None
     assert status["active"] is False
 
-    # 5. After calibration, awareness map should show the enrolled person
-    # May need a couple of listens for the SPRT to accumulate evidence.
+    # 5. After calibration, the map must show identity matching working: some
+    # ENROLLED source appears within a few listens. Deliberately NOT asserted:
+    # WHICH enrolled name wins. Measured 2026-07-02 with real ECAPA: the synthetic
+    # voice generator's speakers are indistinguishable to the embedding
+    # (cross-speaker cos 0.95 vs testperson self-cos 0.932), so the name is a
+    # coin flip on synthetic audio. Name-level discrimination is pinned by
+    # tests/test_matching.py with controlled vectors, and live by the job's
+    # step-2/step-4 checks (docs/GAP_VOICE_DISCRIMINATOR.md).
     found = False
     for _ in range(5):
         amap = _get(f"{base}/awareness")
-        for src in amap.get("sources", []):
-            if src.get("id") == "testperson" and src.get("type") == "enrolled":
-                found = True
-                break
-        if found:
+        if any(s.get("type") == "enrolled" for s in amap.get("sources", [])):
+            found = True
             break
         time.sleep(0.5)
     assert found, (
-        f"enrolled 'testperson' not found in awareness map. "
+        f"no enrolled-type source surfaced after calibration. "
         f"Sources: {[s.get('id') for s in amap.get('sources', [])]}"
     )
 

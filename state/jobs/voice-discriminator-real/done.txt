@@ -1,0 +1,1 @@
+- 2026-07-02T16:14:06-0700 dispatched: B3 capture loop: server-side capture+inference thread (1.0s window, 0.25-0.5s hop); /awareness becomes snapshot read. CHECK: zero browsers attached, log shows >=55 analyzed windows/60s sustained 10min; GET /awareness <50ms (doc path step 1)
