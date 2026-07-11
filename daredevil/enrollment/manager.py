@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -62,6 +63,11 @@ class EnrollmentManager:
         # Wald decision bounds derived from the configured error rates.
         self._A = math.log((1.0 - self.idm.beta) / self.idm.alpha)   # accept identity
         self._B = math.log(self.idm.beta / (1.0 - self.idm.alpha))   # reject identity
+        # Absolute raw-cosine floor for ANY identity decision. Normalized
+        # confidence degenerates with tiny cohorts (2 prints in store made a
+        # cos-0.37 impostor score llr 75, observed live 2026-07-11); raw
+        # similarity is the one rail normalization can't inflate.
+        self._min_accept_cos = float(os.environ.get("DD_MIN_ACCEPT_COS", "0.45"))
         # Cumulative SPRT log-likelihood ratio (a log-odds) per (track, speaker).
         self._llr: Dict[Tuple[str, str], float] = {}
         # CFAR-style running background model — estimated live from ambient frames so
@@ -223,7 +229,8 @@ class EnrollmentManager:
 
             posterior = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, acc))))
             immediate = s >= idm.immediate_cosine
-            decided = immediate or acc >= self._A
+            decided = (s >= self._min_accept_cos
+                       and (immediate or acc >= self._A))
 
             if idm.adapt_target and quality > 0.0:
                 self._maybe_refine(rec, vector, acc, s, quality)
@@ -246,7 +253,9 @@ class EnrollmentManager:
         return best
 
     def is_match(self, m: Optional[dict]) -> bool:
-        return bool(m and (m.get("decided") or m.get("llr", 0.0) >= self._A))
+        # 'decided' already encodes SPRT/immediate acceptance AND the raw
+        # cosine floor — an llr-only fallback here would bypass the floor.
+        return bool(m and m.get("decided"))
 
     # --- accumulator bookkeeping -----------------------------------------
     def retain(self, live_keys: Iterable[str]) -> None:
