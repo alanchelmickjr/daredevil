@@ -156,6 +156,10 @@ def main(argv=None) -> int:
     pb = sub.add_parser("bench", help="measure pipeline latency vs crowd size")
     pb.add_argument("--iters", type=int, default=10)
 
+    pg = sub.add_parser("game", help="GUARDIAN: race Daredevil to the call that matters")
+    pg.add_argument("--rounds", type=int, default=5)
+    pg.add_argument("--seed", type=int)
+
     sub.add_parser("devices", help="show detected array + installed backends")
     sub.add_parser("version", help="print version")
 
@@ -182,6 +186,9 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "bench":
         return _cmd_bench(args)
+    if args.cmd == "game":
+        from .game import run_game
+        return run_game(rounds=args.rounds, seed=args.seed)
     if args.cmd == "devices":
         return _cmd_devices(args)
     if args.cmd == "version":
