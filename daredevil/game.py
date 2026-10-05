@@ -62,15 +62,16 @@ class _Decider:
 
     def __init__(self):
         self.name = "router-rule"
+        self.last = "router-rule"            # who made the most recent call
         self._js = None
         scorer = os.environ.get("DAREDEVIL_JEV_SCORER")
         try:
-            from jev_style import JevStyle, noul  # lazy, optional, local-only
+            from jev_style import JevStyle, choice  # lazy, optional, local-only
             if scorer:
                 self._js = JevStyle.from_pretrained(
                     "chaoliangUNSW/Jev-Style-0.8B-Decision-v3-GGUF",
                     quant="Q4_K_M", scorer=scorer)
-                self._noul = noul
+                self._choice = choice
                 self.name = "jev-style-0.8B (local)"
         except Exception:
             self._js = None
@@ -78,17 +79,18 @@ class _Decider:
     def decide(self, amap: dict, expected: str | None) -> str:
         if self._js is not None:
             try:
-                labels = {
-                    "a": self._noul("Someone may be in danger; act now."),
-                    "w": self._noul("Unusual but not dangerous yet; keep watching."),
-                    "i": self._noul("Ordinary background; nothing to do."),
-                }
-                out = self._js.decide(_describe(amap, expected), labels)
-                key = getattr(out, "label", None) or (out.get("label") if isinstance(out, dict) else out)
-                if key in CHOICES:
-                    return key
+                q = self._choice(
+                    "A home safety monitor heard this. What should it do?",
+                    {"a": "Act now: someone may be in danger.",
+                     "w": "Watch: unusual, not dangerous yet.",
+                     "i": "Ignore: ordinary background."})
+                ans = self._js.decide(_describe(amap, expected), {"call": q})["answers"]["call"]
+                if ans.get("choice") in CHOICES:
+                    self.last = self.name
+                    return ans["choice"]
             except Exception:
                 pass
+        self.last = "router-rule"            # named, so a Jev failure is never passed off as Jev
         return self._rule(amap, expected)
 
     @staticmethod
@@ -145,7 +147,7 @@ def run_game(rounds: int = 5, seed: int | None = None) -> int:
         bot += bot_ok
         print(f"  truth: {CHOICES[truth]}")
         print(f"  you:     {CHOICES[ans]:8} {'✓' if you_ok else '✗'}  {you_ms:7.0f} ms")
-        print(f"  machine: {CHOICES[call]:8} {'✓' if bot_ok else '✗'}  {machine_ms:7.0f} ms")
+        print(f"  machine: {CHOICES[call]:8} {'✓' if bot_ok else '✗'}  {machine_ms:7.0f} ms  [{judge.last}]")
         if not scene:
             print("  ↳ wrong-quiet: no sound was the alarm.")
     print(f"\n  FINAL  you {you}/{len(picks)}  ·  machine {bot}/{len(picks)}")
